@@ -1,0 +1,28 @@
+# Environment variables (API keys, secrets)
+.env
+
+# Maven build output
+target/
+
+# Log files
+*.log
+*.txt
+startup_log.txt
+app_output.txt
+
+# IDE files
+.idea/
+*.iml
+.vscode/
+.DS_Store
+
+# Compiled class files
+*.class
+
+# Package files
+*.jar
+*.war
+*.ear
+
+# Virtual machine crash logs
+hs_err_pid*

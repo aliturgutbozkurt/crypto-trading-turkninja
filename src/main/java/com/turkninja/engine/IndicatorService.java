@@ -1,0 +1,98 @@
+package com.turkninja.engine;
+
+import org.ta4j.core.BarSeries;
+import org.ta4j.core.BaseBarSeriesBuilder;
+import org.ta4j.core.indicators.EMAIndicator;
+import org.ta4j.core.indicators.MACDIndicator;
+import org.ta4j.core.indicators.RSIIndicator;
+import org.ta4j.core.indicators.bollinger.BollingerBandsLowerIndicator;
+import org.ta4j.core.indicators.bollinger.BollingerBandsMiddleIndicator;
+import org.ta4j.core.indicators.bollinger.BollingerBandsUpperIndicator;
+import org.ta4j.core.indicators.helpers.ClosePriceIndicator;
+import org.ta4j.core.indicators.statistics.StandardDeviationIndicator;
+import org.ta4j.core.num.Num;
+
+import java.time.Duration;
+import java.time.ZonedDateTime;
+import java.util.HashMap;
+import java.util.Map;
+
+public class IndicatorService {
+
+    public Map<String, Double> calculateIndicators(BarSeries series) {
+        Map<String, Double> results = new HashMap<>();
+        if (series.getBarCount() == 0)
+            return results;
+
+        ClosePriceIndicator closePrice = new ClosePriceIndicator(series);
+
+        // RSI
+        RSIIndicator rsi = new RSIIndicator(closePrice, 14);
+        results.put("RSI", rsi.getValue(series.getEndIndex()).doubleValue());
+
+        // MACD
+        MACDIndicator macd = new MACDIndicator(closePrice, 12, 26);
+        results.put("MACD", macd.getValue(series.getEndIndex()).doubleValue());
+
+        // Bollinger Bands
+        EMAIndicator avg14 = new EMAIndicator(closePrice, 20);
+        StandardDeviationIndicator sd14 = new StandardDeviationIndicator(closePrice, 20);
+        BollingerBandsMiddleIndicator middleBB = new BollingerBandsMiddleIndicator(avg14);
+        BollingerBandsLowerIndicator lowerBB = new BollingerBandsLowerIndicator(middleBB, sd14);
+        BollingerBandsUpperIndicator upperBB = new BollingerBandsUpperIndicator(middleBB, sd14);
+
+        results.put("BB_LOWER", lowerBB.getValue(series.getEndIndex()).doubleValue());
+        results.put("BB_MIDDLE", middleBB.getValue(series.getEndIndex()).doubleValue());
+        results.put("BB_UPPER", upperBB.getValue(series.getEndIndex()).doubleValue());
+
+        // EMA 9 and 21 for scalping trend detection
+        EMAIndicator ema9 = new EMAIndicator(closePrice, 9);
+        EMAIndicator ema21 = new EMAIndicator(closePrice, 21);
+        results.put("EMA_9", ema9.getValue(series.getEndIndex()).doubleValue());
+        results.put("EMA_21", ema21.getValue(series.getEndIndex()).doubleValue());
+
+        // EMA 50 for overall trend (keep for BTC analysis)
+        EMAIndicator ema50 = new EMAIndicator(closePrice, 50);
+        results.put("EMA_50", ema50.getValue(series.getEndIndex()).doubleValue());
+
+        // Volume spike detection (current vs average)
+        if (series.getBarCount() >= 20) {
+            double currentVolume = series.getLastBar().getVolume().doubleValue();
+            double avgVolume = 0.0;
+            for (int i = series.getEndIndex() - 19; i <= series.getEndIndex(); i++) {
+                avgVolume += series.getBar(i).getVolume().doubleValue();
+            }
+            avgVolume /= 20;
+            results.put("VOLUME_CURRENT", currentVolume);
+            results.put("VOLUME_AVG", avgVolume);
+            results.put("VOLUME_RATIO", avgVolume > 0 ? currentVolume / avgVolume : 0.0);
+        }
+
+        // ATR for volatility filter
+        if (series.getBarCount() >= 14) {
+            double atr = 0.0;
+            for (int i = series.getEndIndex() - 13; i <= series.getEndIndex(); i++) {
+                double high = series.getBar(i).getHighPrice().doubleValue();
+                double low = series.getBar(i).getLowPrice().doubleValue();
+                double prevClose = i > 0 ? series.getBar(i - 1).getClosePrice().doubleValue() : low;
+                double tr = Math.max(high - low, Math.max(Math.abs(high - prevClose), Math.abs(low - prevClose)));
+                atr += tr;
+            }
+            atr /= 14;
+            double currentPrice = closePrice.getValue(series.getEndIndex()).doubleValue();
+            results.put("ATR", atr);
+            results.put("ATR_PERCENT", currentPrice > 0 ? (atr / currentPrice) * 100 : 0.0);
+        }
+
+        return results;
+    }
+
+    public BarSeries createBarSeries(String name) {
+        return new BaseBarSeriesBuilder().withName(name).build();
+    }
+
+    public void addBar(BarSeries series, ZonedDateTime time, double open, double high, double low, double close,
+            double volume) {
+        series.addBar(time, open, high, low, close, volume);
+    }
+}
