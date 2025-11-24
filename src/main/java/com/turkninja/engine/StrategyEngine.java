@@ -11,6 +11,7 @@ import org.ta4j.core.BarSeries;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Executors;
@@ -25,8 +26,9 @@ public class StrategyEngine {
     private final RiskManager riskManager;
     private final PositionTracker positionTracker;
 
-    private final List<String> tradingSymbols = List.of(
-            "BTCUSDT", "ETHUSDT", "DOGEUSDT", "BCHUSDT", "SOLUSDT", "XRPUSDT");
+    private List<String> tradingSymbols = Arrays.asList(
+            "ETHUSDT", "SOLUSDT", "DOGEUSDT", "XRPUSDT", "BCHUSDT", "ATOMUSDT",
+            "ALGOUSDT", "DOTUSDT", "AVAXUSDT", "LINKUSDT", "BNBUSDT");
 
     private ScheduledExecutorService tradingScheduler;
     private volatile boolean tradingActive = false;
@@ -56,8 +58,7 @@ public class StrategyEngine {
         // Use a single thread for scheduling, but spawn Virtual Threads for execution
         tradingScheduler = Executors.newSingleThreadScheduledExecutor();
 
-        // Schedule analysis for all symbols every 1 minute
-        // Schedule analysis for all symbols every 1 minute
+        // Schedule analysis for all symbols every 1 minute (using latest 15m candles)
         tradingScheduler.scheduleAtFixedRate(() -> {
             try {
                 if (tradingActive) {
@@ -141,11 +142,8 @@ public class StrategyEngine {
                 return;
             }
 
-            // 2. Check BTC trend - don't trade in uncertain market
-            if (btcTrend.equals("NEUTRAL")) {
-                logger.debug("Skipping {} - BTC trend is NEUTRAL (waiting for clarity)", symbol);
-                return;
-            }
+            // 2. Log BTC trend but don't block on NEUTRAL (was causing zero trades)
+            logger.info("BTC Trend: {} - Analyzing altcoin {}", btcTrend, symbol);
 
             // 2. Fetch Data from WebSocket cache (NO REST API CALL)
             List<JSONObject> klines = webSocketService.getCachedKlines(symbol, 100);
@@ -168,79 +166,38 @@ public class StrategyEngine {
             double volumeRatio = indicators.getOrDefault("VOLUME_RATIO", 0.0);
             double atrPercent = indicators.getOrDefault("ATR_PERCENT", 0.0);
 
-            logger.info("{} Analysis: Price={}, RSI={}, EMA9={}, EMA21={}, VolRatio={}, ATR%={}",
-                    symbol, currentPrice, rsi, ema9, ema21, volumeRatio, atrPercent);
+            logger.info("{} | Price={} | RSI={} | EMA21={} | Vol={} | BTC={}",
+                    symbol, currentPrice, rsi, ema21, volumeRatio, btcTrend);
 
-            // Scalping thresholds from config
-            double rsiBuyThreshold = Config.getDouble("strategy.rsi.buy.threshold", 35.0);
-            double rsiSellThreshold = Config.getDouble("strategy.rsi.sell.threshold", 65.0);
-            double volumeSpikeMin = Config.getDouble("strategy.volume.spike.multiplier", 1.5);
-            double atrMinPercent = Config.getDouble("strategy.atr.min.threshold", 0.1);
+            // AGGRESSIVE STRATEGY - Enter trades frequently
+            // Quality through TP/SL and circuit breaker, not entry filters
 
-            // LONG Entry: BTC BULLISH + RSI > 55 + Price > EMA21 + Volume
+            // LONG: Just need uptrend + RSI not extreme
             boolean isBuySignal = false;
             String buyReason = "";
 
-            if (btcTrend.equals("BULLISH") && rsi > rsiBuyThreshold && currentPrice > ema21) {
-                // All trend conditions met
-                if (volumeRatio >= volumeSpikeMin) {
-                    // Volume confirmation
-                    if (atrPercent >= atrMinPercent) {
-                        // Sufficient volatility
-                        isBuySignal = true;
-                        buyReason = String.format("BTC_BULLISH + RSI_STRONG (%.1f) + PRICE>EMA21 + VOL (%.2fx)", rsi,
-                                volumeRatio);
-                    } else {
-                        logger.debug("No BUY for {}: ATR too low ({}% < {}%)", symbol, atrPercent, atrMinPercent);
-                    }
-                } else {
-                    logger.debug("No BUY for {}: Volume too low ({}x < {}x)", symbol, volumeRatio, volumeSpikeMin);
-                }
-            } else {
-                if (!btcTrend.equals("BULLISH")) {
-                    logger.debug("No BUY for {}: BTC not BULLISH ({})", symbol, btcTrend);
-                } else if (rsi <= rsiBuyThreshold) {
-                    logger.debug("No BUY for {}: RSI not strong enough ({} <= {})", symbol, rsi, rsiBuyThreshold);
-                } else if (currentPrice <= ema21) {
-                    logger.debug("No BUY for {}: Price below EMA21 ({} <= {})", symbol, currentPrice, ema21);
-                }
+            if (currentPrice > ema21 && rsi > 30 && rsi < 70) {
+                isBuySignal = true;
+                buyReason = String.format("LONG: Price>EMA + RSI(%.0f)", rsi);
+                logger.info("🟢 {} LONG", symbol);
             }
 
             if (isBuySignal) {
-                String msg = String.format("🟢 BUY SIGNAL for %s: %s (Price=%.2f, EMA9=%.2f, EMA21=%.2f)",
-                        symbol, buyReason, currentPrice, ema9, ema21);
+                String msg = String.format("🟢 BUY SIGNAL for %s: %s (Price=%.2f, EMA=%.2f)",
+                        symbol, buyReason, currentPrice, ema21);
                 logger.info(msg);
                 System.out.println(msg);
                 executeEntry(symbol, "BUY", currentPrice);
             }
 
-            // SHORT Entry: BTC BEARISH + RSI < 45 + Price < EMA21 + Volume
+            // SHORT: Just need downtrend + RSI not extreme
             boolean isSellSignal = false;
             String sellReason = "";
 
-            if (btcTrend.equals("BEARISH") && rsi < rsiSellThreshold && currentPrice < ema21) {
-                // All trend conditions met
-                if (volumeRatio >= volumeSpikeMin) {
-                    // Volume confirmation
-                    if (atrPercent >= atrMinPercent) {
-                        // Sufficient volatility
-                        isSellSignal = true;
-                        sellReason = String.format("BTC_BEARISH + RSI_WEAK (%.1f) + PRICE<EMA21 + VOL (%.2fx)", rsi,
-                                volumeRatio);
-                    } else {
-                        logger.debug("No SELL for {}: ATR too low ({}% < {}%)", symbol, atrPercent, atrMinPercent);
-                    }
-                } else {
-                    logger.debug("No SELL for {}: Volume too low ({}x < {}x)", symbol, volumeRatio, volumeSpikeMin);
-                }
-            } else {
-                if (!btcTrend.equals("BEARISH")) {
-                    logger.debug("No SELL for {}: BTC not BEARISH ({})", symbol, btcTrend);
-                } else if (rsi >= rsiSellThreshold) {
-                    logger.debug("No SELL for {}: RSI not weak enough ({} >= {})", symbol, rsi, rsiSellThreshold);
-                } else if (currentPrice >= ema21) {
-                    logger.debug("No SELL for {}: Price above EMA21 ({} >= {})", symbol, currentPrice, ema21);
-                }
+            if (currentPrice < ema21 && rsi > 30 && rsi < 70) {
+                isSellSignal = true;
+                sellReason = String.format("SHORT: Price<EMA + RSI(%.0f)", rsi);
+                logger.info("🔴 {} SHORT", symbol);
             }
 
             if (isSellSignal) {
@@ -414,6 +371,16 @@ public class StrategyEngine {
             double volume = Double.parseDouble(kline.getString("volume"));
 
             ZonedDateTime time = ZonedDateTime.ofInstant(Instant.ofEpochMilli(openTime), ZoneId.of("UTC"));
+
+            // Skip if this timestamp already exists in the series (prevents duplicate bar
+            // error)
+            if (series.getBarCount() > 0 && !series.isEmpty()) {
+                ZonedDateTime lastBarTime = series.getLastBar().getEndTime();
+                if (!time.isAfter(lastBarTime)) {
+                    continue; // Skip duplicate or older bars
+                }
+            }
+
             indicatorService.addBar(series, time, open, high, low, close, volume);
         }
         return series;

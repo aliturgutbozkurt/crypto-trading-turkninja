@@ -36,6 +36,12 @@ public class RiskManager {
     private double dailyLossLimit = 50.0; // Max $50 daily loss
     private double dailyLoss = 0.0;
 
+    // Circuit Breaker for consecutive losses
+    private int consecutiveLosses = 0;
+    private final int MAX_CONSECUTIVE_LOSSES = 3;
+    private volatile boolean tradingPaused = false;
+    private long pauseUntilTime = 0;
+
     public RiskManager(PositionTracker positionTracker, FuturesBinanceService futuresService) {
         this.positionTracker = positionTracker;
         this.futuresService = futuresService;
@@ -60,7 +66,7 @@ public class RiskManager {
 
     // Commission & Activation Settings
     private final double COMMISSION_RATE_ROUND_TRIP = 0.001; // 0.1% (0.05% Entry + 0.05% Exit)
-    private final double TRAILING_ACTIVATION_THRESHOLD = 0.0015; // 0.15% (Faster activation for scalping)
+    private final double TRAILING_ACTIVATION_THRESHOLD = 0.0005; // 0.05% - VERY FAST activation to lock profits
 
     public boolean checkExitCondition(String symbol, BigDecimal currentPrice, boolean isLong) {
         if (!entryPrices.containsKey(symbol))
@@ -298,19 +304,38 @@ public class RiskManager {
      * Check if new position is allowed based on risk limits
      */
     public boolean canOpenPosition(double positionSizeUsdt) {
-        // Check position size limit
+        // 0. Circuit Breaker - Check if trading is paused
+        if (tradingPaused) {
+            long currentTime = System.currentTimeMillis();
+            if (currentTime < pauseUntilTime) {
+                long remainingMinutes = (pauseUntilTime - currentTime) / 60000;
+                logger.warn("⛔ Trading PAUSED due to {} consecutive losses. Resuming in {} minutes",
+                        MAX_CONSECUTIVE_LOSSES, remainingMinutes);
+                return false;
+            } else {
+                // Resume trading
+                tradingPaused = false;
+                consecutiveLosses = 0;
+                logger.info("✅ Trading RESUMED after pause period");
+            }
+        }
+
+        // 1. Check position count limit
+        int currentPositions = positionTracker.getAllPositions().size();
+        if (currentPositions >= maxConcurrentPositions) {
+            logger.warn("Cannot open position: Max concurrent positions reached ({}/{})",
+                    currentPositions, maxConcurrentPositions);
+            return false;
+        }
+
+        // 2. Check position size limit
         if (positionSizeUsdt > maxPositionSizeUsdt) {
-            logger.warn("Position size ${} exceeds limit ${}", positionSizeUsdt, maxPositionSizeUsdt);
+            logger.warn("Cannot open position: Position size ${} exceeds max ${}",
+                    positionSizeUsdt, maxPositionSizeUsdt);
             return false;
         }
 
-        // Check concurrent position limit
-        if (positionTracker.getAllPositions().size() >= maxConcurrentPositions) {
-            logger.warn("Max concurrent positions ({}) reached", maxConcurrentPositions);
-            return false;
-        }
-
-        // Check daily loss limit
+        // 3. Check daily loss limit
         if (dailyLoss >= dailyLossLimit) {
             logger.warn("Daily loss limit reached: ${} / ${}", dailyLoss, dailyLossLimit);
             return false;
@@ -320,11 +345,47 @@ public class RiskManager {
     }
 
     /**
+     * Records a trade's PnL and updates risk metrics.
+     * Triggers circuit breaker if consecutive losses exceed limit.
+     * 
+     * @param pnl The PnL of the closed trade.
+     */
+    public void recordTrade(double pnl) {
+        if (pnl < 0) {
+            dailyLoss += Math.abs(pnl);
+            consecutiveLosses++;
+            logger.warn("❌ Trade closed with loss: ${} (Daily loss: ${}, Consecutive: {})",
+                    pnl, dailyLoss, consecutiveLosses);
+
+            // Check if daily loss limit is hit
+            if (dailyLoss >= dailyLossLimit) {
+                logger.error("DAILY LOSS LIMIT HIT! Stopping all trading.");
+                stopMonitoring();
+                emergencyExit();
+            }
+
+            // Trigger circuit breaker
+            if (consecutiveLosses >= MAX_CONSECUTIVE_LOSSES) {
+                tradingPaused = true;
+                pauseUntilTime = System.currentTimeMillis() + (6 * 60 * 60 * 1000); // 6 hours
+                logger.error("🛑 CIRCUIT BREAKER TRIGGERED! Trading paused for 6 hours after {} consecutive losses",
+                        consecutiveLosses);
+            }
+        } else {
+            // Reset on win
+            consecutiveLosses = 0;
+            logger.info("✅ Trade closed with profit: ${} (Consecutive losses reset)", pnl);
+        }
+    }
+
+    /**
      * Reset daily loss counter (call at start of each day)
      */
     public void resetDailyLoss() {
         dailyLoss = 0.0;
-        logger.info("Daily loss counter reset");
+        consecutiveLosses = 0;
+        tradingPaused = false;
+        logger.info("Daily loss reset to $0.00, circuit breaker reset");
     }
 
     /**

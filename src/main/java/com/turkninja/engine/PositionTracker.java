@@ -20,11 +20,11 @@ public class PositionTracker {
     private final RiskManager riskManager;
     private final Map<String, Position> activePositions = new ConcurrentHashMap<>();
 
-    // Configuration for Crypto Scalping (20x Leverage)
-    // Optimized for realistic profit-taking with controlled risk
-    private final double stopLossPercent = 0.003; // 0.3% = -6% PnL (allow normal fluctuations)
-    private final double takeProfitPercent = 0.004; // 0.4% = +8% PnL (quick profit)
-    private final double trailingStopPercent = 0.002; // 0.2% = 4% pullback (tight lock)
+    // Configuration for Active Trading (20x Leverage)
+    // Tight trailing to lock profits immediately
+    private final double stopLossPercent = 0.01; // 1% = -20% PnL
+    private final double takeProfitPercent = 0.01; // 1% = +20% PnL (quick wins)
+    private final double trailingStopPercent = 0.003; // 0.3% trailing (very tight lock)
     private final double minPositionUsdt = 5.0; // Ignore positions smaller than $5 (Dust)
 
     public PositionTracker(TradeRepository tradeRepository, RiskManager riskManager) {

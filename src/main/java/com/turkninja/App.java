@@ -118,11 +118,12 @@ public class App extends Application {
                         }
                     }
 
-                    // Klines for each symbol (use 1h interval, 100 candles)
-                    List<String> symbols = Arrays.asList("BTCUSDT", "ETHUSDT",
-                            "SOLUSDT", "DOGEUSDT", "XRPUSDT", "BCHUSDT");
+                    // Klines for each symbol (use 15m interval, 100 candles)
+                    List<String> symbols = Arrays.asList("BTCUSDT", "ETHUSDT", "ATOMUSDT",
+                            "SOLUSDT", "DOGEUSDT", "XRPUSDT", "BCHUSDT", "ALGOUSDT",
+                            "DOTUSDT", "AVAXUSDT", "LINKUSDT", "BNBUSDT");
                     for (String sym : symbols) {
-                        String klinesJson = futuresBinanceService.getKlines(sym, "1h", 100);
+                        String klinesJson = futuresBinanceService.getKlines(sym, "15m", 100);
                         // Convert JSON array string to List<JSONObject>
                         // Binance returns klines as nested arrays: [[timestamp, open, high, low, close,
                         // volume, ...], ...]
@@ -157,9 +158,9 @@ public class App extends Application {
                 webSocketService.addPositionCacheListener(positions -> {
                     positionTracker.syncPositions(positions);
                 });
-                // Start Kline stream for all symbols (1m candles)
+                // Start Kline stream for all symbols (15m candles)
                 List<String> klineSymbols = Arrays.asList("BTCUSDT", "ETHUSDT", "ATOMUSDT", "SOLUSDT", "DOGEUSDT",
-                        "XRPUSDT", "BCHUSDT");
+                        "XRPUSDT", "BCHUSDT", "ALGOUSDT", "DOTUSDT", "AVAXUSDT", "LINKUSDT", "BNBUSDT");
                 webSocketService.startKlineStream(klineSymbols);
                 logger.info("Kline stream started");
 

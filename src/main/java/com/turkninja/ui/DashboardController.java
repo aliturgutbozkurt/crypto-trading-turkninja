@@ -178,6 +178,11 @@ public class DashboardController {
         if (uiScheduler == null || uiScheduler.isShutdown()) {
             uiScheduler = Executors.newSingleThreadScheduledExecutor(Thread.ofVirtual().factory());
             uiScheduler.scheduleAtFixedRate(this::updateUI, 0, 1, TimeUnit.SECONDS);
+
+            // Auto-reload positions every 15 seconds
+            uiScheduler.scheduleAtFixedRate(() -> {
+                Platform.runLater(this::onReloadPositions);
+            }, 15, 15, TimeUnit.SECONDS);
         }
     }
 
@@ -398,6 +403,7 @@ public class DashboardController {
 
     @FXML
     private void onReloadPositions() {
+        logger.info("🔄 Reloading positions triggered (manual or auto-refresh)");
         statusLabel.setText("Reloading positions from Binance...");
 
         new Thread(() -> {

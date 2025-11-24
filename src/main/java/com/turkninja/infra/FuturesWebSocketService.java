@@ -153,12 +153,12 @@ public class FuturesWebSocketService {
      */
     public void startKlineStream(List<String> symbols) {
         try {
-            // Build combined stream URL for 1-minute klines
+            // Build combined stream URL for 15-minute klines
             StringBuilder streamBuilder = new StringBuilder(WS_BASE_URL + "/stream?streams=");
             for (int i = 0; i < symbols.size(); i++) {
                 if (i > 0)
                     streamBuilder.append("/");
-                streamBuilder.append(symbols.get(i).toLowerCase()).append("@kline_1m");
+                streamBuilder.append(symbols.get(i).toLowerCase()).append("@kline_15m");
             }
 
             String wsUrl = streamBuilder.toString();
