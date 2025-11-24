@@ -31,4 +31,4 @@ echo ""
 
 # Start the application
 # Start the application and log to file
-mvn clean javafx:run | tee startup_log.txt
+mvn clean spring-boot:run | tee startup_log.txt

@@ -306,33 +306,68 @@ public class FuturesWebSocketService {
                                 JSONObject balance = balances.getJSONObject(i);
                                 if ("USDT".equals(balance.getString("a"))) {
                                     cachedAccountInfo.put("totalWalletBalance", balance.getDouble("wb"));
-                                    cachedAccountInfo.put("totalMarginBalance", balance.getDouble("cw"));
                                     cachedAccountInfo.put("availableBalance", balance.getDouble("bc"));
+                                    // cw is Cross Wallet Balance, we'll calculate totalMarginBalance (Equity) later
                                 }
                             }
                         }
 
-                        // Update positions cache
+                        // Update positions cache (Merge logic)
                         if (accountData.has("P")) {
-                            JSONArray positions = accountData.getJSONArray("P");
-                            cachedPositions = new JSONArray();
+                            JSONArray updatedPositions = accountData.getJSONArray("P");
 
-                            for (int i = 0; i < positions.length(); i++) {
-                                JSONObject pos = positions.getJSONObject(i);
-                                double posAmt = pos.getDouble("pa");
+                            // Initialize cache if null
+                            if (cachedPositions == null) {
+                                cachedPositions = new JSONArray();
+                            }
 
-                                // Only include non-zero positions
+                            // Create a map of existing positions for easy lookup/update
+                            Map<String, JSONObject> positionMap = new HashMap<>();
+                            for (int i = 0; i < cachedPositions.length(); i++) {
+                                JSONObject pos = cachedPositions.getJSONObject(i);
+                                positionMap.put(pos.getString("symbol"), pos);
+                            }
+
+                            // Process updates
+                            for (int i = 0; i < updatedPositions.length(); i++) {
+                                JSONObject update = updatedPositions.getJSONObject(i);
+                                String symbol = update.getString("s");
+                                double posAmt = update.getDouble("pa");
+                                double entryPrice = update.getDouble("ep");
+                                double unrealizedProfit = update.getDouble("up");
+
                                 if (posAmt != 0) {
-                                    JSONObject position = new JSONObject();
-                                    position.put("symbol", pos.getString("s"));
-                                    position.put("positionAmt", posAmt);
-                                    position.put("entryPrice", pos.getDouble("ep"));
-                                    position.put("unRealizedProfit", pos.getDouble("up"));
-                                    cachedPositions.put(position);
+                                    // Update or add position
+                                    JSONObject pos = positionMap.getOrDefault(symbol, new JSONObject());
+                                    pos.put("symbol", symbol);
+                                    pos.put("positionAmt", posAmt);
+                                    pos.put("entryPrice", entryPrice);
+                                    pos.put("unRealizedProfit", unrealizedProfit); // Ensure casing matches what
+                                                                                   // Controller expects
+                                    pos.put("unrealizedProfit", unrealizedProfit); // Add both casings to be safe
+                                    positionMap.put(symbol, pos);
+                                } else {
+                                    // Remove closed position
+                                    positionMap.remove(symbol);
                                 }
                             }
 
-                            logger.debug("Cached {} positions", cachedPositions.length());
+                            // Rebuild cachedPositions array
+                            cachedPositions = new JSONArray();
+                            double totalUnrealizedPnL = 0.0;
+
+                            for (JSONObject pos : positionMap.values()) {
+                                cachedPositions.put(pos);
+                                totalUnrealizedPnL += pos.optDouble("unRealizedProfit", 0.0);
+                            }
+
+                            // Update Account PnL and Margin Balance
+                            cachedAccountInfo.put("totalUnrealizedProfit", totalUnrealizedPnL);
+                            double walletBalance = cachedAccountInfo.optDouble("totalWalletBalance", 0.0);
+                            cachedAccountInfo.put("totalMarginBalance", walletBalance + totalUnrealizedPnL);
+
+                            logger.debug("Updated cache: {} positions, Total PnL: {}", cachedPositions.length(),
+                                    totalUnrealizedPnL);
                             notifyPositionCacheListeners();
                         }
                     }
@@ -365,10 +400,23 @@ public class FuturesWebSocketService {
                 }
             }
 
-        } catch (Exception e) {
+        } catch (
+
+        Exception e) {
             logger.error("Error handling user data message", e);
         }
     }
+
+    // Data caches (to avoid REST API calls)
+    // private volatile JSONObject cachedAccountInfo; // Already defined
+    // private volatile JSONArray cachedPositions; // Already defined
+    // private final Map<String, LinkedList<JSONObject>> klineCache = new
+    // ConcurrentHashMap<>(); // Already defined
+    private final Map<String, Double> markPriceCache = new ConcurrentHashMap<>();
+    // private final List<Consumer<JSONArray>> positionCacheListeners = new
+    // java.util.concurrent.CopyOnWriteArrayList<>(); // Already defined
+
+    // ... (existing code) ...
 
     /**
      * Handle mark price stream messages
@@ -378,6 +426,12 @@ public class FuturesWebSocketService {
             JSONObject json = new JSONObject(text);
             if (json.has("data")) {
                 JSONObject data = json.getJSONObject("data");
+                String symbol = data.getString("s");
+                double price = data.getDouble("p");
+
+                // Update cache
+                markPriceCache.put(symbol, price);
+
                 if (markPriceUpdateListener != null) {
                     markPriceUpdateListener.accept(data);
                 }
@@ -385,6 +439,13 @@ public class FuturesWebSocketService {
         } catch (Exception e) {
             logger.error("Error handling mark price message", e);
         }
+    }
+
+    /**
+     * Get cached mark price for a symbol
+     */
+    public double getMarkPrice(String symbol) {
+        return markPriceCache.getOrDefault(symbol, 0.0);
     }
 
     /**

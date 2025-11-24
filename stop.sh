@@ -5,10 +5,8 @@
 
 echo "🛑 Stopping Crypto Trading Bot..."
 
-# Find and kill all Maven JavaFX processes
-pkill -f "javafx:run"
-
 # Also kill any Java processes running the app
+pkill -f "spring-boot:run"
 pkill -f "com.turkninja.App"
 
 echo "✅ All bot processes stopped"

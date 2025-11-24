@@ -14,6 +14,7 @@ import java.time.ZonedDateTime;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -47,6 +48,10 @@ public class StrategyEngine {
     }
 
     private volatile String btcTrend = "NEUTRAL"; // BULLISH, BEARISH, NEUTRAL
+
+    // Anti-reversal mechanism: Track recently closed positions
+    private final Map<String, Long> symbolCooldown = new ConcurrentHashMap<>();
+    private final long COOLDOWN_MILLIS = 3 * 60 * 1000; // 3 minutes cooldown after closing position
 
     public void startAutomatedTrading() {
         if (tradingActive) {
@@ -100,6 +105,10 @@ public class StrategyEngine {
         return tradingActive;
     }
 
+    public List<String> getTradingSymbols() {
+        return tradingSymbols;
+    }
+
     private void analyzeBTC() {
         try {
             String symbol = "BTCUSDT";
@@ -142,6 +151,19 @@ public class StrategyEngine {
                 return;
             }
 
+            // 2. Check cooldown - prevent immediate reversal after closing
+            Long lastCloseTime = symbolCooldown.get(symbol);
+            if (lastCloseTime != null) {
+                long timeSinceClose = System.currentTimeMillis() - lastCloseTime;
+                if (timeSinceClose < COOLDOWN_MILLIS) {
+                    long remainingSeconds = (COOLDOWN_MILLIS - timeSinceClose) / 1000;
+                    logger.debug("Skipping {} - cooldown active ({}s remaining)", symbol, remainingSeconds);
+                    return;
+                }
+                // Cooldown expired, remove it
+                symbolCooldown.remove(symbol);
+            }
+
             // 2. Log BTC trend but don't block on NEUTRAL (was causing zero trades)
             logger.info("BTC Trend: {} - Analyzing altcoin {}", btcTrend, symbol);
 
@@ -169,10 +191,11 @@ public class StrategyEngine {
             logger.info("{} | Price={} | RSI={} | EMA21={} | Vol={} | BTC={}",
                     symbol, currentPrice, rsi, ema21, volumeRatio, btcTrend);
 
-            // AGGRESSIVE STRATEGY - Enter trades frequently
-            // Quality through TP/SL and circuit breaker, not entry filters
+            // STRATEGY WITHOUT BTC FILTER (EMERGENCY FIX)
+            // BTC trend filter was causing false signals and 30% loss
+            // TODO: Implement better BTC trend detection
 
-            // LONG: Just need uptrend + RSI not extreme
+            // LONG: Uptrend + RSI not extreme
             boolean isBuySignal = false;
             String buyReason = "";
 
@@ -190,7 +213,7 @@ public class StrategyEngine {
                 executeEntry(symbol, "BUY", currentPrice);
             }
 
-            // SHORT: Just need downtrend + RSI not extreme
+            // SHORT: Downtrend + RSI not extreme
             boolean isSellSignal = false;
             String sellReason = "";
 

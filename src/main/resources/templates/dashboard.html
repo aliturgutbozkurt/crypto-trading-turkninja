@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title th:text="${title}">TurkNinja Trading Bot</title>
+    <link rel="stylesheet" th:href="@{/css/styles.css}">
+    <link rel="stylesheet" th:href="@{/css/buttons.css}">
+</head>
+
+<body>
+    <div class="container">
+        <header>
+            <h1>🤖 TurkNinja Crypto Trading Bot</h1>
+            <p class="subtitle">Futures 20x Leverage - Automated Trading</p>
+        </header>
+
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-label">Total Balance</div>
+                <div class="stat-value" id="totalBalance">$0.00</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Unrealized PnL</div>
+                <div class="stat-value" id="unrealizedPnL">$0.00</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Active Positions</div>
+                <div class="stat-value" id="activePositions">0</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Strategy Status</div>
+                <div class="stat-value" id="strategyStatus">Loading...</div>
+            </div>
+        </div>
+
+        <div class="actions">
+            <button onclick="reloadPositions()" class="btn btn-primary">🔄 Reload Positions</button>
+            <button onclick="emergencyExit()" class="btn btn-danger">🚨 Emergency Exit</button>
+        </div>
+
+        <div class="positions-section">
+            <h2>Active Positions</h2>
+            <div id="statusMessage" class="status-message"></div>
+            <table id="positionsTable">
+                <thead>
+                    <tr>
+                        <th>Symbol</th>
+                        <th>Side</th>
+                        <th>Entry Price</th>
+                        <th>Current Price</th>
+                        <th>P&L</th>
+                        <th>ROI</th>
+                        <th>Size (USDT)</th>
+                        <th>Balance %</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+                <tbody id="positionsBody">
+                    <tr>
+                        <td colspan="8" class="no-data">No active positions. Strategy is scanning...</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <footer>
+            <p>Last updated: <span id="lastUpdate">Never</span></p>
+            <p class="disclaimer">⚠️ High-risk trading with 20x leverage. Auto stop-loss: -$0.50, Take-profit: +$1.00
+            </p>
+        </footer>
+    </div>
+
+    <script th:src="@{/js/dashboard.js}"></script>
+</body>
+
+</html>
