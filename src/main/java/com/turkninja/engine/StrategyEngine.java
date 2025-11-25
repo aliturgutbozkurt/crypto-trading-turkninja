@@ -65,12 +65,16 @@ public class StrategyEngine {
         this.multiTfAnalyzer = multiTfAnalyzer;
         this.telegram = telegram;
         // Load configurable entry filter parameters
-        this.rsiLongMin = Config.getDouble("strategy.rsi.long.min", 40.0);
-        this.rsiLongMax = Config.getDouble("strategy.rsi.long.max", 80.0);
-        this.rsiShortMin = Config.getDouble("strategy.rsi.short.min", 20.0);
-        this.rsiShortMax = Config.getDouble("strategy.rsi.short.max", 60.0);
-        this.macdSignalTolerance = Config.getDouble("strategy.macd.signal.tolerance", 0.0005);
-        this.useMultiTimeframe = Boolean.parseBoolean(Config.get("strategy.use.multi.timeframe", "true"));
+        rsiLongMin = Double.parseDouble(Config.get("strategy.rsi.long.min", "50"));
+        rsiLongMax = Double.parseDouble(Config.get("strategy.rsi.long.max", "78"));
+        rsiShortMin = Double.parseDouble(Config.get("strategy.rsi.short.min", "22"));
+        rsiShortMax = Double.parseDouble(Config.get("strategy.rsi.short.max", "50"));
+        macdSignalTolerance = Double.parseDouble(Config.get("strategy.macd.signal.tolerance", "0.00001"));
+        emaBufferPercent = Double.parseDouble(Config.get("strategy.ema.buffer.percent", "0.007"));
+        useMultiTimeframe = Boolean.parseBoolean(Config.get("strategy.use.multitimeframe", "true"));
+
+        logger.info("Strategy Config Loaded: RSI [{}-{}] / [{}-{}], EMA Buffer: {}%, Multi-TF: {}",
+                rsiLongMin, rsiLongMax, rsiShortMin, rsiShortMax, emaBufferPercent * 100, useMultiTimeframe);
 
         // Batch signal selection config
         this.batchModeEnabled = Boolean.parseBoolean(Config.get("strategy.batch.enabled", "true"));
@@ -84,6 +88,7 @@ public class StrategyEngine {
     private double rsiShortMin;
     private double rsiShortMax;
     private double macdSignalTolerance;
+    private double emaBufferPercent;
     private boolean useMultiTimeframe;
 
     private volatile String btcTrend = "NEUTRAL"; // BULLISH, BEARISH, NEUTRAL
@@ -289,8 +294,10 @@ public class StrategyEngine {
             boolean isBuySignal = false;
             String buyReason = "";
 
-            // EMA buffer: +0.3% to avoid sideways false signals
-            boolean trendUp = currentPrice > ema50_15m * 1.003;
+            // EMA buffer: from config to avoid sideways false signals
+            double emaMultiplierUp = 1 + emaBufferPercent;
+            double emaMultiplierDown = 1 - emaBufferPercent;
+            boolean trendUp = currentPrice > ema50_15m * emaMultiplierUp;
             boolean momentumUp = rsi_15m > rsiLongMin && rsi_15m < rsiLongMax;
             boolean macdBullish = macd > (macdSignal + macdSignalTolerance);
 
@@ -361,7 +368,7 @@ public class StrategyEngine {
             String sellReason = "";
 
             // EMA buffer: -0.3% to avoid sideways false signals
-            boolean trendDown = currentPrice < ema50_15m * 0.997;
+            boolean trendDown = currentPrice < ema50_15m * emaMultiplierDown;
             boolean momentumDown = rsi_15m < rsiShortMax && rsi_15m > rsiShortMin;
             boolean macdBearish = macd < (macdSignal - macdSignalTolerance);
 
