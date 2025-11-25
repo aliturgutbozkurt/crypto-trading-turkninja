@@ -36,6 +36,7 @@ public class FuturesWebSocketService {
     private Consumer<JSONObject> positionUpdateListener;
     private Consumer<JSONObject> orderUpdateListener;
     private Consumer<JSONObject> markPriceUpdateListener;
+    private Consumer<JSONObject> klineUpdateListener;
 
     // Data caches (to avoid REST API calls)
     private volatile JSONObject cachedAccountInfo;
@@ -78,11 +79,6 @@ public class FuturesWebSocketService {
         }
     }
 
-    /**
-     * Add a list of klines to the cache for a symbol.
-     * This is used for the initial REST fallback before WebSocket streams fill the
-     * cache.
-     */
     /**
      * Add a list of klines to the cache for a symbol and interval.
      * This is used for the initial REST fallback before WebSocket streams fill the
@@ -241,6 +237,14 @@ public class FuturesWebSocketService {
                     }
 
                     logger.debug("Kline cached for {}: {} candles", cacheKey, klines.size());
+
+                    // Notify listener about closed candle (for signal generation)
+                    if (klineUpdateListener != null) {
+                        // Pass the simplified kline with symbol info
+                        simplifiedKline.put("s", symbol);
+                        simplifiedKline.put("i", interval);
+                        klineUpdateListener.accept(simplifiedKline);
+                    }
                 }
             }
         } catch (Exception e) {
@@ -496,6 +500,13 @@ public class FuturesWebSocketService {
      */
     public void setMarkPriceUpdateListener(Consumer<JSONObject> listener) {
         this.markPriceUpdateListener = listener;
+    }
+
+    /**
+     * Set listener for kline updates (closed candles)
+     */
+    public void setKlineUpdateListener(Consumer<JSONObject> listener) {
+        this.klineUpdateListener = listener;
     }
 
     /**

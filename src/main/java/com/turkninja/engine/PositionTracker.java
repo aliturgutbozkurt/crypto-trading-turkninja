@@ -92,12 +92,16 @@ public class PositionTracker {
             return PositionAction.CLOSE_STOP_LOSS;
         }
 
-        // Check Take Profit
-        if (netPnlPercent >= takeProfitPercent) {
-            logger.info("✅ Take-profit triggered for {}: Net P&L={:.2f}% (Threshold: +{:.2f}%)",
-                    symbol, netPnlPercent * 100, takeProfitPercent * 100);
-            return PositionAction.CLOSE_TAKE_PROFIT;
-        }
+        // FIXED TAKE PROFIT DISABLED - Using Trailing Stop instead
+        // Trailing Stop will protect profits dynamically
+        /*
+         * if (netPnlPercent >= takeProfitPercent) {
+         * logger.
+         * info("✅ Take-profit triggered for {}: Net P&L={:.2f}% (Threshold: +{:.2f}%)",
+         * symbol, netPnlPercent * 100, takeProfitPercent * 100);
+         * return PositionAction.CLOSE_TAKE_PROFIT;
+         * }
+         */
 
         return PositionAction.HOLD;
     }
@@ -127,39 +131,52 @@ public class PositionTracker {
 
     /**
      * Sync positions with WebSocket update
+     * IMPORTANT: This preserves existing tracking state to avoid resetting trailing
+     * stops
      */
     public void syncPositions(org.json.JSONArray positions) {
         if (positions == null)
             return;
+
+        // Track which symbols we see from Binance
+        java.util.Set<String> binanceSymbols = new java.util.HashSet<>();
 
         for (int i = 0; i < positions.length(); i++) {
             org.json.JSONObject pos = positions.getJSONObject(i);
             String symbol = pos.getString("symbol");
             double amount = pos.getDouble("positionAmt");
 
-            if (amount == 0) {
-                // Position is closed, remove if we are tracking it
-                if (activePositions.containsKey(symbol)) {
-                    logger.info("Sync: Removing closed position for {}", symbol);
-                    removePosition(symbol, 0.0);
-                }
-            } else {
-                // Position is open
+            if (amount != 0) {
+                binanceSymbols.add(symbol);
+
+                // Only add if NOT already tracking (this preserves trailing stop state)
                 if (!activePositions.containsKey(symbol)) {
-                    // We found an external position! Track it.
                     double entryPrice = pos.getDouble("entryPrice");
                     double notionalValue = Math.abs(amount * entryPrice);
 
                     if (notionalValue < minPositionUsdt) {
-                        // Ignore dust
-                        return;
+                        continue; // Skip dust
                     }
 
                     String side = amount > 0 ? "BUY" : "SELL";
-                    logger.info("Sync: Found external position for {}. Tracking it.", symbol);
+                    logger.info("Sync: Found new external position for {}. Tracking it.", symbol);
                     trackPosition(symbol, side, entryPrice, Math.abs(amount));
                 }
+                // If already tracking, DO NOTHING (preserve trailing stop state)
             }
+        }
+
+        // Remove positions that are closed (not in Binance anymore)
+        java.util.List<String> toRemove = new java.util.ArrayList<>();
+        for (String symbol : activePositions.keySet()) {
+            if (!binanceSymbols.contains(symbol)) {
+                toRemove.add(symbol);
+            }
+        }
+
+        for (String symbol : toRemove) {
+            logger.info("Sync: Removing closed position for {}", symbol);
+            removePosition(symbol, 0.0);
         }
     }
 

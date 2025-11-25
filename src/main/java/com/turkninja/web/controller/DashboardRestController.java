@@ -194,18 +194,10 @@ public class DashboardRestController {
             String positionsJson = futuresService.getPositionInfo();
             JSONArray positionsArr = new JSONArray(positionsJson);
 
-            // Clear ALL internal tracking first
-            if (positionTracker != null) {
-                var trackedPositions = positionTracker.getAllPositions();
-                for (String symbol : trackedPositions.keySet()) {
-                    positionTracker.removePosition(symbol, 0.0);
-                }
-            }
-
             // Update WebSocket cache
             webSocketService.setCachedPositions(positionsArr);
 
-            // Re-sync PositionTracker
+            // Sync PositionTracker (smart sync preserves existing tracking state)
             if (positionTracker != null) {
                 positionTracker.syncPositions(positionsArr);
             }

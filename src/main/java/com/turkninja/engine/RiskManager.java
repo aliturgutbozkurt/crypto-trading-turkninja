@@ -103,7 +103,7 @@ public class RiskManager {
                     logger.info("🔼 New High for {} LONG: {} (Entry: {}, Net PnL: {}%, Activated: YES)",
                             symbol, currentPrice, entryPrice, netProfitPct);
                 }
-                return false; // Still in trend
+                // Don't return - continue to check stop price even when making new highs
             }
 
             // If not activated yet, rely on fixed Stop Loss in PositionTracker
@@ -144,15 +144,24 @@ public class RiskManager {
                     logger.info("🔽 New Low for {} SHORT: {} (Entry: {}, Net PnL: {}%, Activated: YES)",
                             symbol, currentPrice, entryPrice, netProfitPct);
                 }
-                return false;
+                // Don't return - continue to check stop price even when making new lows
             }
 
             if (!isActivated) {
+                // DEBUG LOG
+                // logger.debug("Not activated for {}: Extreme={} > Activation={}", symbol,
+                // extremePrice, activationPrice);
                 return false;
             }
 
             // Calculate Stop Price: Low * (1 + trailingPct)
             BigDecimal stopPrice = extremePrice.multiply(BigDecimal.ONE.add(trailingPct));
+
+            // DEBUG LOG
+            if (symbol.equals("LINKUSDT") || symbol.equals("SOLUSDT") || symbol.equals("BCHUSDT")) {
+                logger.info("🔍 CHECK {} SHORT: Current={}, Extreme={}, Stop={}, Activated={}",
+                        symbol, currentPrice, extremePrice, stopPrice, isActivated);
+            }
 
             if (currentPrice.compareTo(stopPrice) >= 0) {
                 BigDecimal grossProfit = entryPrice.subtract(extremePrice)
@@ -283,18 +292,19 @@ public class RiskManager {
      */
     private double getCurrentMarkPrice(String symbol) {
         try {
-            // TEMPORARY FIX: Skip WebSocket cache, use REST API directly
-            // WebSocket mark price stream is not populating cache correctly
-            /*
-             * if (webSocketService != null) {
-             * double cachedPrice = webSocketService.getMarkPrice(symbol);
-             * if (cachedPrice > 0) {
-             * return cachedPrice;
-             * }
-             * }
-             */
+            // Try WebSocket cache first (fast, real-time)
+            if (webSocketService != null) {
+                double cachedPrice = webSocketService.getMarkPrice(symbol);
+                if (cachedPrice > 0) {
+                    return cachedPrice;
+                }
+                // Only log warning occasionally to avoid spam
+                if (Math.random() < 0.01) { // 1% of calls
+                    logger.warn("Mark price cache MISS for {}, falling back to REST API", symbol);
+                }
+            }
 
-            // Use REST API (reliable but slower)
+            // Fallback to REST API if cache unavailable
             return futuresService.getSymbolPriceTicker(symbol);
         } catch (Exception e) {
             logger.error("Failed to get mark price for {}", symbol, e);
@@ -307,6 +317,36 @@ public class RiskManager {
      */
     public void setWebSocketService(FuturesWebSocketService webSocketService) {
         this.webSocketService = webSocketService;
+    }
+
+    /**
+     * Check trailing stops immediately when mark price updates (event-driven)
+     * This provides faster response than the 1-second polling loop
+     */
+    public void checkPositionOnPriceUpdate(String symbol, double currentPrice) {
+        if (!monitoringActive) {
+            return;
+        }
+
+        try {
+            PositionTracker.Position position = positionTracker.getPosition(symbol);
+            if (position == null) {
+                return; // No position for this symbol
+            }
+
+            // Check trailing stop (real-time)
+            boolean trailingStopTriggered = checkExitCondition(
+                    symbol,
+                    BigDecimal.valueOf(currentPrice),
+                    position.side.equals("BUY"));
+
+            if (trailingStopTriggered) {
+                logger.info("⚡ Real-time trailing stop triggered for {} at price {}", symbol, currentPrice);
+                closePosition(symbol, position, "TRAILING_STOP", currentPrice);
+            }
+        } catch (Exception e) {
+            logger.error("Error checking position on price update for {}", symbol, e);
+        }
     }
 
     /**

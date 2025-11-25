@@ -88,37 +88,43 @@ public class StrategyEngine {
         }
 
         tradingActive = true;
-        // Use a single thread for scheduling, but spawn Virtual Threads for execution
-        tradingScheduler = Executors.newSingleThreadScheduledExecutor();
 
-        // Schedule analysis for all symbols every 1 minute (using latest 5m candles)
-        tradingScheduler.scheduleAtFixedRate(() -> {
+        // Register listener for closed candles (new candle open)
+        webSocketService.setKlineUpdateListener(kline -> {
+            if (!tradingActive)
+                return;
+
             try {
-                if (tradingActive) {
-                    logger.info("Strategy loop started");
-                    // Analyze BTC first to determine market trend
+                String symbol = kline.getString("s");
+                String interval = kline.getString("i");
+
+                // We only care about 5m candles (as configured in WebSocketService)
+                if (!"5m".equals(interval))
+                    return;
+
+                // 1. Analyze BTC Trend first if it's BTC
+                if ("BTCUSDT".equals(symbol)) {
                     analyzeBTC();
-
-                    try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
-                        for (String symbol : tradingSymbols) {
-                            if (!symbol.equals("BTCUSDT")) { // BTC already analyzed
-                                executor.submit(() -> {
-                                    try {
-                                        analyzeAndTrade(symbol);
-                                    } catch (Exception e) {
-                                        logger.error("Error in automated trading for " + symbol, e);
-                                    }
-                                });
-                            }
-                        }
-                    } // Executor closes here, waiting for all virtual threads to complete
                 }
-            } catch (Throwable t) {
-                logger.error("CRITICAL: Strategy scheduler failed", t);
-            }
-        }, 0, 1, TimeUnit.MINUTES);
 
-        logger.info("Automated trading started for symbols: {}", tradingSymbols);
+                // 2. Analyze Trading Symbols
+                if (tradingSymbols.contains(symbol) && !symbol.equals("BTCUSDT")) {
+                    // Use Virtual Thread for analysis to avoid blocking WebSocket thread
+                    Thread.ofVirtual().start(() -> {
+                        try {
+                            analyzeAndTrade(symbol);
+                        } catch (Exception e) {
+                            logger.error("Error in automated trading for " + symbol, e);
+                        }
+                    });
+                }
+            } catch (Exception e) {
+                logger.error("Error processing kline update", e);
+            }
+        });
+
+        logger.info("Automated trading started (Event-Driven: 5m Candle Close)");
+        logger.info("Monitoring symbols: {}", tradingSymbols);
     }
 
     public void stopAutomatedTrading() {
@@ -171,7 +177,7 @@ public class StrategyEngine {
         }
     }
 
-    private void analyzeAndTrade(String symbol) {
+    public void analyzeAndTrade(String symbol) {
         try {
             // 1. Check if we already have a position
             if (hasActivePosition(symbol)) {

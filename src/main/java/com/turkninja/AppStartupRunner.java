@@ -151,6 +151,18 @@ public class AppStartupRunner implements CommandLineRunner {
             // Start Risk Manager monitoring
             riskManager.startMonitoring();
 
+            // Register RiskManager for real-time trailing stop checks on mark price updates
+            webSocketService.setMarkPriceUpdateListener(priceUpdate -> {
+                try {
+                    String symbol = priceUpdate.getString("s");
+                    double markPrice = priceUpdate.getDouble("p");
+                    riskManager.checkPositionOnPriceUpdate(symbol, markPrice);
+                } catch (Exception e) {
+                    logger.error("Error processing mark price update for trailing stop", e);
+                }
+            });
+            logger.info("✅ Real-time trailing stop monitoring enabled via mark price stream");
+
             logger.info("✅ System Fully Initialized and Running");
             logger.info("✅ Web UI available at http://localhost:8080");
 
@@ -161,9 +173,6 @@ public class AppStartupRunner implements CommandLineRunner {
         }
     }
 
-    /**
-     * Helper method to load klines from REST API and add to WebSocket cache
-     */
     /**
      * Helper method to load klines from REST API and add to WebSocket cache
      */
