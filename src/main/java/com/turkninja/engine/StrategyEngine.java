@@ -286,6 +286,13 @@ public class StrategyEngine {
             boolean momentumUp = rsi_5m > rsiLongMin && rsi_5m < rsiLongMax;
             boolean macdBullish = macd > (macdSignal + macdSignalTolerance);
 
+            // Debug: Log signal conditions every 10 candles
+            if (Math.random() < 0.1) {
+                logger.info(
+                        "🔍 {} Check: Price={}, EMA50={}, RSI={}, MACD={}/{}, TrendUp={}, MomentumUp={}, MACDBullish={}",
+                        symbol, currentPrice, ema50_5m, rsi_5m, macd, macdSignal, trendUp, momentumUp, macdBullish);
+            }
+
             if (trendUp && momentumUp && macdBullish) {
                 isBuySignal = true;
                 buyReason = String.format(
@@ -312,6 +319,8 @@ public class StrategyEngine {
                     SignalScore score = calculateSignalScore(symbol, "BUY", currentPrice,
                             rsi_5m, macd, macdSignal, ema50_5m, 0);
                     signalBatch.addSignal(score);
+                    logger.info("📊 Signal added to batch: {} BUY @ {} | Score: {}", symbol, currentPrice,
+                            score.totalScore);
                     return; // Don't execute immediately
                 }
 
