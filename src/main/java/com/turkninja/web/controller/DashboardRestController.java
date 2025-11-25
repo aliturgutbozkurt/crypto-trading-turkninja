@@ -191,19 +191,12 @@ public class DashboardRestController {
     @PostMapping("/reload-positions")
     public String reloadPositions() {
         try {
-            String positionsJson = futuresService.getPositionInfo();
-            JSONArray positionsArr = new JSONArray(positionsJson);
-
-            // Update WebSocket cache
-            webSocketService.setCachedPositions(positionsArr);
-
-            // Sync PositionTracker (smart sync preserves existing tracking state)
-            if (positionTracker != null) {
-                positionTracker.syncPositions(positionsArr);
-            }
-
-            return "Positions reloaded successfully";
+            logger.info("Manual position reload requested");
+            positionTracker.syncPositions();
+            logger.info("Positions synced from Binance");
+            return "OK";
         } catch (Exception e) {
+            logger.error("Error reloading positions", e);
             return "Error: " + e.getMessage();
         }
     }
