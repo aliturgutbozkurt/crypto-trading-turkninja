@@ -141,6 +141,17 @@ public class IndicatorService {
             results.putAll(nwe);
         }
 
+        // Super Trend
+        if (series.getBarCount() >= 20) {
+            // Read Super Trend parameters from config
+            int stAtrPeriod = Integer.parseInt(com.turkninja.config.Config.get("strategy.supertrend.atr.period", "10"));
+            double stMultiplier = Double
+                    .parseDouble(com.turkninja.config.Config.get("strategy.supertrend.multiplier", "3.0"));
+
+            Map<String, Double> superTrend = SuperTrendCalculator.calculate(series, stAtrPeriod, stMultiplier);
+            results.putAll(superTrend);
+        }
+
         return results;
     }
 

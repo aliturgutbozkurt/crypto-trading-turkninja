@@ -23,7 +23,6 @@ public class OrderBookService {
     private final double imbalanceThreshold;
     private final double maxSpreadPercent;
     private final double wallStdDevMultiplier;
-    private final double wallStdDevMultiplier;
     private final double maxSlippagePercent;
     private final boolean wallFilterEnabled;
 

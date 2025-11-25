@@ -81,6 +81,9 @@ public class StrategyEngine {
         rsiBandsEnabled = Boolean.parseBoolean(Config.get("strategy.rsi.bands.enabled", "true"));
         rsiBandsMinWidth = Double.parseDouble(Config.get("strategy.rsi.bands.min_width", "10.0"));
 
+        // Load Super Trend config
+        superTrendEnabled = Boolean.parseBoolean(Config.get("strategy.supertrend.enabled", "true"));
+
         logger.info(
                 "Strategy Config Loaded: RSI [{}-{}] / [{}-{}], EMA Buffer: {}%, Multi-TF: {}, NWE: {}, RSI Bands: {}",
                 rsiLongMin, rsiLongMax, rsiShortMin, rsiShortMax, emaBufferPercent * 100, useMultiTimeframe,
@@ -108,6 +111,9 @@ public class StrategyEngine {
     // RSI Bands parameters
     private boolean rsiBandsEnabled;
     private double rsiBandsMinWidth;
+
+    // Super Trend parameters
+    private boolean superTrendEnabled;
 
     private volatile String btcTrend = "NEUTRAL"; // BULLISH, BEARISH, NEUTRAL
 
@@ -415,6 +421,15 @@ public class StrategyEngine {
                     return;
                 }
 
+                // Super Trend Filter
+                if (superTrendEnabled && indicators5m.containsKey("SUPER_TREND_DIRECTION")) {
+                    double trendDirection = indicators5m.get("SUPER_TREND_DIRECTION");
+                    if (trendDirection < 0) { // Bearish
+                        logger.info("⏸️ {} LONG signal filtered - Super Trend is Bearish", symbol);
+                        return;
+                    }
+                }
+
                 // Batch mode: Calculate score and add to batch
                 if (batchModeEnabled) {
                     SignalScore score = calculateSignalScore(symbol, "BUY", currentPrice,
@@ -535,6 +550,15 @@ public class StrategyEngine {
                 if (!orderBookService.confirmSellSignal(symbol, currentPrice)) {
                     logger.info("⏸️ {} SHORT signal filtered by Order Book (Imbalance/Walls)", symbol);
                     return;
+                }
+
+                // Super Trend Filter
+                if (superTrendEnabled && indicators5m.containsKey("SUPER_TREND_DIRECTION")) {
+                    double trendDirection = indicators5m.get("SUPER_TREND_DIRECTION");
+                    if (trendDirection > 0) { // Bullish
+                        logger.info("⏸️ {} SHORT signal filtered - Super Trend is Bullish", symbol);
+                        return;
+                    }
                 }
 
                 // Batch mode: Calculate score and add to batch
