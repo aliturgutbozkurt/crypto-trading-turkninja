@@ -225,7 +225,15 @@ public class StrategyEngine {
     }
 
     public void analyzeAndTrade(String symbol) {
+        logger.info("🔎 analyzeAndTrade called for {}", symbol);
+
+        if (!tradingActive) {
+            logger.warn("⚠️ Trading NOT ACTIVE for {}", symbol);
+            return;
+        }
+
         try {
+            logger.info("🟢 Analysis starting for {}: tradingActive={}", symbol, tradingActive);
             // 1. Check if we already have a position
             if (hasActivePosition(symbol)) {
                 logger.debug("Skipping {} - already has active position", symbol);
