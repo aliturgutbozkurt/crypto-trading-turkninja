@@ -147,13 +147,19 @@ public class StrategyEngine {
 
         // Start batch processor if enabled
         if (batchModeEnabled) {
+            logger.info("🔵 BATCH MODE ENABLED - Initializing batch processor...");
             batchProcessor = Executors.newSingleThreadScheduledExecutor();
             int batchWindowSeconds = Integer.parseInt(Config.get("strategy.batch.window.seconds", "60"));
+
+            logger.info("🔵 Scheduling batch processor: window={}s, topN={}, minScore={}",
+                    batchWindowSeconds, batchTopN, minSignalScore);
+
             batchProcessor.scheduleAtFixedRate(() -> {
                 try {
+                    logger.info("⏰ BATCH TIMER TRIGGERED - Processing signals...");
                     processBatchedSignals();
                 } catch (Exception e) {
-                    logger.error("Error processing batch signals", e);
+                    logger.error("❌ Error processing batch signals", e);
                 }
             }, batchWindowSeconds, batchWindowSeconds, TimeUnit.SECONDS);
 
