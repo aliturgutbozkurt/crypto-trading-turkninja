@@ -92,14 +92,14 @@ public class AppStartupRunner implements CommandLineRunner {
                     }
                 }
 
-                // Klines for each symbol (use 5m interval, 100 candles)
+                // Klines for each symbol (use 15m interval, 100 candles)
                 List<String> symbols = Arrays.asList("BTCUSDT", "ETHUSDT", "ATOMUSDT",
                         "SOLUSDT", "DOGEUSDT", "XRPUSDT", "BCHUSDT", "ALGOUSDT",
                         "DOTUSDT", "AVAXUSDT", "LINKUSDT", "BNBUSDT",
                         "ADAUSDT", "NEARUSDT", "SANDUSDT", "MANAUSDT", "ARBUSDT");
                 for (String sym : symbols) {
-                    // Fetch 5m klines
-                    loadKlinesToCache(sym, "5m");
+                    // Fetch 15m klines
+                    loadKlinesToCache(sym, "15m");
                 }
             } catch (Exception e) {
                 logger.warn("REST fallback failed to populate caches: {}", e.getMessage());
