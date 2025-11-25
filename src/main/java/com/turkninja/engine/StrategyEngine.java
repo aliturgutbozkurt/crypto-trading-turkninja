@@ -366,21 +366,21 @@ public class StrategyEngine {
             boolean macdBearish = macd < (macdSignal - macdSignalTolerance);
 
             // Changed to OR logic: At least 2 out of 3 conditions must be met
-            int conditionsMet = 0;
+            int conditionsMetShort = 0;
             if (trendDown)
-                conditionsMet++;
+                conditionsMetShort++;
             if (momentumDown)
-                conditionsMet++;
+                conditionsMetShort++;
             if (macdBearish)
-                conditionsMet++;
+                conditionsMetShort++;
 
-            if (conditionsMet >= 2) {
+            if (conditionsMetShort >= 2) {
                 isSellSignal = true;
                 String conditions = String.format("TrendDown=%s, MomentumDown=%s, MACDBearish=%s", trendDown,
                         momentumDown, macdBearish);
                 sellReason = String.format(
                         "SHORT: %d/3 conditions met (%s) RSI=%.0f",
-                        conditionsMet, conditions, rsi_5m);
+                        conditionsMetShort, conditions, rsi_5m);
                 logger.info("🔴 {} SHORT Signal: {}", symbol, sellReason);
             }
 
