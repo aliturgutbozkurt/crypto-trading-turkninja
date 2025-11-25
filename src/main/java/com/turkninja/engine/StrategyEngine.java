@@ -40,7 +40,14 @@ public class StrategyEngine {
             "ADAUSDT", "NEARUSDT", "SANDUSDT", "MANAUSDT", "ARBUSDT");
 
     private ScheduledExecutorService tradingScheduler;
+    private ScheduledExecutorService batchProcessor; // Processes batched signals
     private volatile boolean tradingActive = false;
+
+    // Batch signal collection
+    private final SignalBatch signalBatch = new SignalBatch();
+    private boolean batchModeEnabled;
+    private int batchTopN;
+    private double minSignalScore;
 
     // Position sizing parameters
     // private static final double MAX_POSITION_PERCENT = 0.25; // Moved to Config
@@ -64,6 +71,11 @@ public class StrategyEngine {
         this.rsiShortMax = Config.getDouble("strategy.rsi.short.max", 60.0);
         this.macdSignalTolerance = Config.getDouble("strategy.macd.signal.tolerance", 0.0005);
         this.useMultiTimeframe = Boolean.parseBoolean(Config.get("strategy.use.multi.timeframe", "true"));
+
+        // Batch signal selection config
+        this.batchModeEnabled = Boolean.parseBoolean(Config.get("strategy.batch.enabled", "true"));
+        this.batchTopN = Integer.parseInt(Config.get("strategy.batch.top.n", "3"));
+        this.minSignalScore = Config.getDouble("strategy.signal.min.score", 50.0);
     }
 
     // Configurable entry filter parameters
@@ -132,6 +144,24 @@ public class StrategyEngine {
 
         logger.info("Automated trading started (Event-Driven: 5m Candle Close)");
         logger.info("Monitoring symbols: {}", tradingSymbols);
+
+        // Start batch processor if enabled
+        if (batchModeEnabled) {
+            batchProcessor = Executors.newSingleThreadScheduledExecutor();
+            int batchWindowSeconds = Integer.parseInt(Config.get("strategy.batch.window.seconds", "60"));
+            batchProcessor.scheduleAtFixedRate(() -> {
+                try {
+                    processBatchedSignals();
+                } catch (Exception e) {
+                    logger.error("Error processing batch signals", e);
+                }
+            }, batchWindowSeconds, batchWindowSeconds, TimeUnit.SECONDS);
+
+            logger.info("✅ Batch signal processor started (window: {}s, top: {}, min score: {})",
+                    batchWindowSeconds, batchTopN, minSignalScore);
+        } else {
+            logger.info("⚠️ Batch mode DISABLED - using immediate execution");
+        }
     }
 
     public void stopAutomatedTrading() {
@@ -139,6 +169,10 @@ public class StrategyEngine {
         if (tradingScheduler != null) {
             tradingScheduler.shutdown();
             logger.info("Automated trading stopped");
+        }
+        if (batchProcessor != null) {
+            batchProcessor.shutdown();
+            logger.info("Batch processor stopped");
         }
     }
 
@@ -267,6 +301,15 @@ public class StrategyEngine {
                     return; // Skip this trade
                 }
 
+                // Batch mode: Calculate score and add to batch
+                if (batchModeEnabled) {
+                    SignalScore score = calculateSignalScore(symbol, "BUY", currentPrice,
+                            rsi_5m, macd, macdSignal, ema50_5m, 0);
+                    signalBatch.addSignal(score);
+                    return; // Don't execute immediately
+                }
+
+                // Fallback: Immediate execution if batch mode disabled
                 String msg = String.format("🟢 BUY SIGNAL for %s: %s (Price=%.2f)", symbol, buyReason, currentPrice);
                 logger.info(msg);
                 System.out.println(msg);
@@ -309,6 +352,15 @@ public class StrategyEngine {
                     return; // Skip this trade
                 }
 
+                // Batch mode: Calculate score and add to batch
+                if (batchModeEnabled) {
+                    SignalScore score = calculateSignalScore(symbol, "SELL", currentPrice,
+                            rsi_5m, macd, macdSignal, ema50_5m, 0);
+                    signalBatch.addSignal(score);
+                    return; // Don't execute immediately
+                }
+
+                // Fallback: Immediate execution if batch mode disabled
                 String msg = String.format("🔴 SELL SIGNAL for %s: %s (Price=%.2f)", symbol, sellReason, currentPrice);
                 logger.info(msg);
                 System.out.println(msg);
@@ -532,6 +584,106 @@ public class StrategyEngine {
                 logger.error("Failed to push signal to UI", e);
             }
         }
+    }
+
+    /**
+     * Calculate comprehensive signal score based on multiple criteria
+     */
+    private SignalScore calculateSignalScore(String symbol, String side, double price,
+            double rsi, double macd, double macdSignal,
+            double ema50, double volume) {
+        SignalScore score = new SignalScore(symbol, side, price);
+
+        // 1. RSI Score (0-25 points)
+        if ("BUY".equals(side)) {
+            // Higher RSI = stronger bullish momentum
+            // Best: RSI 75 (near overbought) = 25 points
+            // Worst: RSI 55 (barely bullish) = 0 points
+            score.rsiScore = Math.max(0, ((rsi - 55) / 20) * 25);
+        } else { // SELL
+            // Lower RSI = stronger bearish momentum
+            // Best: RSI 25 (near oversold) = 25 points
+            // Worst: RSI 45 (barely bearish) = 0 points
+            score.rsiScore = Math.max(0, ((45 - rsi) / 20) * 25);
+        }
+
+        // 2. MACD Score (0-25 points)
+        // Larger divergence = stronger signal
+        double macdDivergence = Math.abs(macd - macdSignal);
+        score.macdScore = Math.min(macdDivergence * 10000, 25); // Scale and cap
+
+        // 3. Trend Score (0-20 points)
+        MultiTimeframeAnalyzer.TrendDirection h1Trend = multiTfAnalyzer.get1HTrend(symbol);
+        if ("BUY".equals(side)) {
+            if (h1Trend == MultiTimeframeAnalyzer.TrendDirection.BULLISH) {
+                score.trendScore = 20; // Perfect alignment
+            } else if (h1Trend == MultiTimeframeAnalyzer.TrendDirection.NEUTRAL) {
+                score.trendScore = 10; // Neutral okay
+            }
+        } else { // SELL
+            if (h1Trend == MultiTimeframeAnalyzer.TrendDirection.BEARISH) {
+                score.trendScore = 20;
+            } else if (h1Trend == MultiTimeframeAnalyzer.TrendDirection.NEUTRAL) {
+                score.trendScore = 10;
+            }
+        }
+
+        // 4. Volume Score (0-15 points) - placeholder, need volume data
+        // For now, give moderate score
+        score.volumeScore = 10;
+
+        // 5. BTC Score (0-10 points)
+        if ("BUY".equals(side) && !"BEARISH".equals(btcTrend)) {
+            score.btcScore = "BULLISH".equals(btcTrend) ? 10 : 5;
+        } else if ("SELL".equals(side) && !"BULLISH".equals(btcTrend)) {
+            score.btcScore = "BEARISH".equals(btcTrend) ? 10 : 5;
+        }
+
+        // 6. Depth Score (0-5 points) - placeholder
+        score.depthScore = 5;
+
+        score.calculateTotalScore();
+        return score;
+    }
+
+    /**
+     * Process batched signals and execute best ones
+     */
+    private void processBatchedSignals() {
+        int batchSize = signalBatch.size();
+        if (batchSize == 0) {
+            return;
+        }
+
+        logger.info("🔄 Processing signal batch: {} signals collected", batchSize);
+
+        // Get best signals above minimum score
+        List<SignalScore> bestSignals = signalBatch.getSignalsAboveThreshold(minSignalScore, batchTopN);
+
+        if (bestSignals.isEmpty()) {
+            logger.info("⏸️ No signals above minimum score ({}) in this batch", minSignalScore);
+            signalBatch.clear();
+            return;
+        }
+
+        logger.info("🏆 Selected {} best signals from batch:", bestSignals.size());
+        for (int i = 0; i < bestSignals.size(); i++) {
+            SignalScore sig = bestSignals.get(i);
+            logger.info("  {}. {}", i + 1, sig.toString());
+        }
+
+        // Execute entries for best signals
+        for (SignalScore sig : bestSignals) {
+            if (!riskManager.canOpenNewPosition()) {
+                logger.info("⏸️ Cannot enter {} - risk limit reached", sig.symbol);
+                continue;
+            }
+
+            logger.info("✅ Executing BEST signal: {} {}", sig.symbol, sig.side);
+            executeEntry(sig.symbol, sig.side, sig.price);
+        }
+
+        signalBatch.clear();
     }
 
     public void shutdown() {
