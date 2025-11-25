@@ -459,13 +459,23 @@ public class StrategyEngine {
                     side, symbol, price, positionSize, quantity, String.format("%.4f", totalCommission));
 
             // 6. Place Order
-            String orderId = futuresService.placeMarketOrder(symbol, side, quantity);
+            // 6. Place Order
+            String orderResponse = futuresService.placeMarketOrder(symbol, side, quantity);
+
+            // Check for failure
+            if (orderResponse == null || orderResponse.contains("error")
+                    || orderResponse.contains("Margin is insufficient")) {
+                logger.error("❌ Order FAILED for {}: {}", symbol, orderResponse);
+                pushSignal(symbol, side, "Order Failed: " + orderResponse, price, false, "FAILED");
+                return; // STOP HERE - Do not track position or send Telegram
+            }
+
             logger.info("✅ Order placed for {}: {} {} @ {}", symbol, side, quantity, price);
 
-            // 7. Track Position
+            // 7. Track Position (Only if successful)
             positionTracker.trackPosition(symbol, side, price, quantity);
 
-            // 8. Send Telegram Notification
+            // 8. Send Telegram Notification (Only if successful)
             if (telegram != null && telegram.isEnabled()) {
                 telegram.notifyPositionOpened(symbol, side, price, quantity, positionSize);
             }
