@@ -54,6 +54,14 @@ public class Config {
         return defaultValue;
     }
 
+    public static boolean getBoolean(String key, boolean defaultValue) {
+        String value = get(key);
+        if (value != null) {
+            return Boolean.parseBoolean(value);
+        }
+        return defaultValue;
+    }
+
     public static final String BINANCE_API_KEY = "BINANCE_API_KEY";
     public static final String BINANCE_SECRET_KEY = "BINANCE_SECRET_KEY";
     public static final String MONGODB_URI = "MONGODB_URI";

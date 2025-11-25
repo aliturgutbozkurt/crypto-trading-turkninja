@@ -30,6 +30,8 @@ function connectWebSocket() {
             const data = JSON.parse(event.data);
             if (data.type === 'UPDATE') {
                 updateDashboard(data);
+            } else if (data.type === 'SIGNAL') {
+                addSignal(data.signal);
             }
         } catch (e) {
             console.error('Error parsing WebSocket message:', e);
@@ -187,5 +189,43 @@ async function emergencyExit() {
     } catch (error) {
         statusEl.textContent = '❌ Error: ' + error.message;
         statusEl.className = 'status-message error';
+    }
+}
+
+// Add trading signal to the signals list
+function addSignal(signal) {
+    const signalsList = document.getElementById('signalsList');
+
+    // Create signal element
+    const signalEl = document.createElement('div');
+    signalEl.className = `signal-item ${signal.type.toLowerCase()} ${signal.executed ? 'executed' : 'blocked'}`;
+
+    const time = new Date(signal.timestamp).toLocaleTimeString();
+    const icon = signal.type === 'BUY' ? '🟢' : '🔴';
+    const statusIcon = signal.executed ? '✅' : '🚫';
+
+    signalEl.innerHTML = `
+        <div class="signal-header">
+            <span class="signal-icon">${icon}</span>
+            <span class="signal-symbol">${signal.symbol}</span>
+            <span class="signal-type">${signal.type}</span>
+            <span class="signal-status">${statusIcon} ${signal.status}</span>
+            <span class="signal-time">${time}</span>
+        </div>
+        <div class="signal-details">
+            <div class="signal-price">$${signal.price.toFixed(2)}</div>
+            <div class="signal-reason">${signal.reason}</div>
+        </div>
+    `;
+
+    // Add to top of list with animation
+    signalsList.insertBefore(signalEl, signalsList.firstChild);
+
+    // Animate entrance
+    setTimeout(() => signalEl.classList.add('show'), 10);
+
+    // Keep only last 20 signals
+    while (signalsList.children.length > 20) {
+        signalsList.removeChild(signalsList.lastChild);
     }
 }

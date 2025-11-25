@@ -4,6 +4,7 @@ import com.turkninja.infra.FuturesWebSocketService;
 import com.turkninja.web.controller.DashboardRestController;
 import com.turkninja.web.dto.AccountDTO;
 import com.turkninja.web.dto.PositionDTO;
+import com.turkninja.web.dto.SignalDTO;
 import com.turkninja.web.socket.DashboardWebSocketHandler;
 import org.json.JSONObject;
 import org.springframework.stereotype.Service;
@@ -51,5 +52,20 @@ public class WebSocketPushService {
                 e.printStackTrace();
             }
         }, 0, 250, TimeUnit.MILLISECONDS);
+    }
+
+    /**
+     * Push trading signal to all connected clients
+     */
+    public void pushSignal(SignalDTO signal) {
+        try {
+            JSONObject message = new JSONObject();
+            message.put("type", "SIGNAL");
+            message.put("signal", new JSONObject(signal));
+
+            dashboardWebSocketHandler.broadcast(message.toString());
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
     }
 }

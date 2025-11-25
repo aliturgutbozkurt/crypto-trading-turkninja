@@ -3,15 +3,18 @@ package com.turkninja;
 import com.turkninja.engine.PositionTracker;
 import com.turkninja.engine.RiskManager;
 import com.turkninja.engine.StrategyEngine;
+import com.turkninja.engine.OrderBookService;
 import com.turkninja.infra.FuturesBinanceService;
 import com.turkninja.infra.FuturesWebSocketService;
 import com.turkninja.infra.SynchronizationService;
+import com.turkninja.web.service.WebSocketPushService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.stereotype.Component;
 
 import java.util.Arrays;
+import java.util.ArrayList;
 import java.util.List;
 
 @Component
@@ -25,19 +28,25 @@ public class AppStartupRunner implements CommandLineRunner {
     private final RiskManager riskManager;
     private final StrategyEngine strategyEngine;
     private final SynchronizationService syncService;
+    private final OrderBookService orderBookService;
+    private final WebSocketPushService webSocketPushService;
 
     public AppStartupRunner(FuturesBinanceService futuresBinanceService,
             FuturesWebSocketService webSocketService,
             PositionTracker positionTracker,
             RiskManager riskManager,
             StrategyEngine strategyEngine,
-            SynchronizationService syncService) {
+            SynchronizationService syncService,
+            OrderBookService orderBookService,
+            WebSocketPushService webSocketPushService) {
         this.futuresBinanceService = futuresBinanceService;
         this.webSocketService = webSocketService;
         this.positionTracker = positionTracker;
         this.riskManager = riskManager;
         this.strategyEngine = strategyEngine;
         this.syncService = syncService;
+        this.orderBookService = orderBookService;
+        this.webSocketPushService = webSocketPushService;
     }
 
     @Override
@@ -83,30 +92,14 @@ public class AppStartupRunner implements CommandLineRunner {
                     }
                 }
 
-                // Klines for each symbol (use 15m interval, 100 candles)
+                // Klines for each symbol (use 5m interval, 100 candles)
                 List<String> symbols = Arrays.asList("BTCUSDT", "ETHUSDT", "ATOMUSDT",
                         "SOLUSDT", "DOGEUSDT", "XRPUSDT", "BCHUSDT", "ALGOUSDT",
-                        "DOTUSDT", "AVAXUSDT", "LINKUSDT", "BNBUSDT");
+                        "DOTUSDT", "AVAXUSDT", "LINKUSDT", "BNBUSDT",
+                        "ADAUSDT", "NEARUSDT", "SANDUSDT", "MANAUSDT", "ARBUSDT");
                 for (String sym : symbols) {
-                    String klinesJson = futuresBinanceService.getKlines(sym, "15m", 100);
-                    // Convert JSON array string to List<JSONObject>
-                    org.json.JSONArray arr = new org.json.JSONArray(klinesJson);
-                    java.util.List<org.json.JSONObject> list = new java.util.ArrayList<>();
-                    for (int i = 0; i < arr.length(); i++) {
-                        org.json.JSONArray klineArr = arr.getJSONArray(i);
-                        // Convert array to object with named fields
-                        org.json.JSONObject klineObj = new org.json.JSONObject();
-                        klineObj.put("openTime", klineArr.getLong(0)); // Open time
-                        klineObj.put("open", klineArr.getString(1)); // Open
-                        klineObj.put("high", klineArr.getString(2)); // High
-                        klineObj.put("low", klineArr.getString(3)); // Low
-                        klineObj.put("close", klineArr.getString(4)); // Close
-                        klineObj.put("volume", klineArr.getString(5)); // Volume
-                        klineObj.put("closeTime", klineArr.getLong(6)); // Close time
-                        list.add(klineObj);
-                    }
-                    webSocketService.addKlinesToCache(sym, list);
-                    logger.info("Loaded {} klines for {} from REST API", list.size(), sym);
+                    // Fetch 5m klines
+                    loadKlinesToCache(sym, "5m");
                 }
             } catch (Exception e) {
                 logger.warn("REST fallback failed to populate caches: {}", e.getMessage());
@@ -121,11 +114,26 @@ public class AppStartupRunner implements CommandLineRunner {
             webSocketService.addPositionCacheListener(positions -> {
                 positionTracker.syncPositions(positions);
             });
-            // Start Kline stream for all symbols (15m candles)
+            // Start Kline stream for all symbols (5m candles)
             List<String> klineSymbols = Arrays.asList("BTCUSDT", "ETHUSDT", "ATOMUSDT", "SOLUSDT", "DOGEUSDT",
-                    "XRPUSDT", "BCHUSDT", "ALGOUSDT", "DOTUSDT", "AVAXUSDT", "LINKUSDT", "BNBUSDT");
+                    "XRPUSDT", "BCHUSDT", "ALGOUSDT", "DOTUSDT", "AVAXUSDT", "LINKUSDT", "BNBUSDT",
+                    "ADAUSDT", "NEARUSDT", "SANDUSDT", "MANAUSDT", "ARBUSDT");
             webSocketService.startKlineStream(klineSymbols);
             logger.info("Kline stream started");
+
+            // Start Depth (Order Book) stream for all trading symbols
+            webSocketService.setOrderBookService(orderBookService);
+            List<String> depthSymbols = strategyEngine.getTradingSymbols();
+            // Initialize order books first
+            for (String sym : depthSymbols) {
+                orderBookService.initializeOrderBook(sym);
+            }
+            webSocketService.startDepthStream(depthSymbols);
+            logger.info("📊 Order Book (Depth) stream started for {} signals", depthSymbols.size());
+
+            // Connect WebSocket push service to StrategyEngine for real-time signal
+            // notifications
+            strategyEngine.setWebSocketPushService(webSocketPushService);
 
             // Start automated trading
             strategyEngine.startAutomatedTrading();
@@ -150,6 +158,41 @@ public class AppStartupRunner implements CommandLineRunner {
             logger.error("Initialization failed", t);
             System.err.println("CRITICAL INITIALIZATION FAILURE: " + t.getMessage());
             t.printStackTrace();
+        }
+    }
+
+    /**
+     * Helper method to load klines from REST API and add to WebSocket cache
+     */
+    /**
+     * Helper method to load klines from REST API and add to WebSocket cache
+     */
+    private void loadKlinesToCache(String symbol, String interval) {
+        try {
+            String klinesJson = futuresBinanceService.getKlines(symbol, interval, 100);
+            org.json.JSONArray klinesArr = new org.json.JSONArray(klinesJson);
+            List<org.json.JSONObject> klineList = new ArrayList<>();
+
+            for (int i = 0; i < klinesArr.length(); i++) {
+                org.json.JSONArray klineData = klinesArr.getJSONArray(i);
+
+                // Convert array format to JSONObject format expected by FuturesWebSocketService
+                org.json.JSONObject simplifiedKline = new org.json.JSONObject();
+                simplifiedKline.put("openTime", klineData.getLong(0));
+                simplifiedKline.put("open", klineData.getString(1));
+                simplifiedKline.put("high", klineData.getString(2));
+                simplifiedKline.put("low", klineData.getString(3));
+                simplifiedKline.put("close", klineData.getString(4));
+                simplifiedKline.put("volume", klineData.getString(5));
+                simplifiedKline.put("closeTime", klineData.getLong(6));
+
+                klineList.add(simplifiedKline);
+            }
+
+            webSocketService.addKlinesToCache(symbol, interval, klineList);
+            logger.info("Loaded {} {} klines for {}", klineList.size(), interval, symbol);
+        } catch (Exception e) {
+            logger.warn("Failed to load {} klines for {}: {}", interval, symbol, e.getMessage());
         }
     }
 }

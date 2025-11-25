@@ -32,7 +32,9 @@ public class IndicatorService {
 
         // MACD
         MACDIndicator macd = new MACDIndicator(closePrice, 12, 26);
+        EMAIndicator macdSignal = new EMAIndicator(macd, 9);
         results.put("MACD", macd.getValue(series.getEndIndex()).doubleValue());
+        results.put("MACD_SIGNAL", macdSignal.getValue(series.getEndIndex()).doubleValue());
 
         // Bollinger Bands
         EMAIndicator avg14 = new EMAIndicator(closePrice, 20);

@@ -2,6 +2,7 @@ package com.turkninja.engine;
 
 import com.turkninja.config.Config;
 import com.turkninja.infra.FuturesBinanceService;
+import com.turkninja.infra.FuturesWebSocketService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -27,13 +28,14 @@ public class RiskManager {
 
     private PositionTracker positionTracker;
     private final FuturesBinanceService futuresService;
+    private FuturesWebSocketService webSocketService; // For cached mark prices
     private final ScheduledExecutorService monitoringExecutor;
     private volatile boolean monitoringActive = false;
 
     // Risk limits
-    private final double maxPositionSizeUsdt = 100.0; // Max $100 per position
+    private final double maxPositionSizeUsdt;
     private final int maxConcurrentPositions;
-    private double dailyLossLimit = 50.0; // Max $50 daily loss
+    private double dailyLossLimit;
     private double dailyLoss = 0.0;
 
     // Circuit Breaker for consecutive losses
@@ -42,11 +44,20 @@ public class RiskManager {
     private volatile boolean tradingPaused = false;
     private long pauseUntilTime = 0;
 
+    // Commission & Activation Settings
+    private final double COMMISSION_RATE_ROUND_TRIP = 0.001; // 0.1% (0.05% Entry + 0.05% Exit)
+    private final double TRAILING_ACTIVATION_THRESHOLD;
+
     public RiskManager(PositionTracker positionTracker, FuturesBinanceService futuresService) {
         this.positionTracker = positionTracker;
         this.futuresService = futuresService;
-        this.maxConcurrentPositions = Config.getInt("risk.max_concurrent_positions", 7);
+        this.maxConcurrentPositions = Config.getInt("risk.max_concurrent_positions", 1000);
+        this.maxPositionSizeUsdt = Config.getDouble("risk.max_position_size", 1000.0);
+        this.dailyLossLimit = Config.getDouble("risk.daily_loss_limit", 500.0);
         this.monitoringExecutor = Executors.newSingleThreadScheduledExecutor(Thread.ofVirtual().factory());
+
+        // Load trailing activation threshold from config (default 0.3%)
+        this.TRAILING_ACTIVATION_THRESHOLD = Config.getDouble("strategy.trailing.activation.threshold", 0.003);
         logger.info(
                 "RiskManager initialized with SL/TP automation (Max Position: ${}, Max Concurrent: {}, Daily Loss Limit: ${})",
                 maxPositionSizeUsdt, maxConcurrentPositions, dailyLossLimit);
@@ -63,10 +74,6 @@ public class RiskManager {
         logger.info("Registered position for {}: Entry={}, TrailingStop={}%", symbol, entryPrice,
                 trailingStopPercentage.multiply(BigDecimal.valueOf(100)));
     }
-
-    // Commission & Activation Settings
-    private final double COMMISSION_RATE_ROUND_TRIP = 0.001; // 0.1% (0.05% Entry + 0.05% Exit)
-    private final double TRAILING_ACTIVATION_THRESHOLD = 0.0005; // 0.05% - VERY FAST activation to lock profits
 
     public boolean checkExitCondition(String symbol, BigDecimal currentPrice, boolean isLong) {
         if (!entryPrices.containsKey(symbol))
@@ -236,8 +243,13 @@ public class RiskManager {
      */
     private void closePosition(String symbol, PositionTracker.Position position, String reason, double currentPrice) {
         try {
-            logger.info("Closing position {} due to {}: Entry={}, Current={}",
-                    symbol, reason, position.entryPrice, currentPrice);
+            // Calculate exit commission (0.04% of notional value)
+            double quantity = Math.abs(position.quantity);
+            double notionalValue = quantity * currentPrice;
+            double exitCommission = notionalValue * 0.0004; // 0.04% exit fee
+
+            logger.info("Closing position {} due to {}: Entry={}, Current={}, Exit Fee=${}",
+                    symbol, reason, position.entryPrice, currentPrice, String.format("%.4f", exitCommission));
 
             // Close position via Futures API
             String result = futuresService.closePosition(symbol);
@@ -267,15 +279,34 @@ public class RiskManager {
     }
 
     /**
-     * Get current mark price for a symbol
+     * Get current mark price for a symbol (uses WebSocket cache if available)
      */
     private double getCurrentMarkPrice(String symbol) {
         try {
+            // TEMPORARY FIX: Skip WebSocket cache, use REST API directly
+            // WebSocket mark price stream is not populating cache correctly
+            /*
+             * if (webSocketService != null) {
+             * double cachedPrice = webSocketService.getMarkPrice(symbol);
+             * if (cachedPrice > 0) {
+             * return cachedPrice;
+             * }
+             * }
+             */
+
+            // Use REST API (reliable but slower)
             return futuresService.getSymbolPriceTicker(symbol);
         } catch (Exception e) {
             logger.error("Failed to get mark price for {}", symbol, e);
             return 0.0;
         }
+    }
+
+    /**
+     * Set WebSocket service for cached mark price access
+     */
+    public void setWebSocketService(FuturesWebSocketService webSocketService) {
+        this.webSocketService = webSocketService;
     }
 
     /**

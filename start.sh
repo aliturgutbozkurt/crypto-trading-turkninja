@@ -30,5 +30,11 @@ echo "🚀 Starting Crypto Trading Bot..."
 echo ""
 
 # Start the application
+# Add local Maven to PATH if it exists
+if [ -d "/tmp/apache-maven-3.9.6/bin" ]; then
+    export PATH=/tmp/apache-maven-3.9.6/bin:$PATH
+    echo "✅ Using local Maven from /tmp/apache-maven-3.9.6"
+fi
+
 # Start the application and log to file
 mvn clean spring-boot:run | tee startup_log.txt

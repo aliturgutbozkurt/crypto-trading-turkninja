@@ -1,5 +1,6 @@
 package com.turkninja.engine;
 
+import com.turkninja.config.Config;
 import com.turkninja.infra.repository.TradeRepository;
 import org.bson.Document;
 import org.slf4j.Logger;
@@ -20,83 +21,81 @@ public class PositionTracker {
     private final RiskManager riskManager;
     private final Map<String, Position> activePositions = new ConcurrentHashMap<>();
 
-    // Configuration for Active Trading (Fixed Dollar TP/SL)
-    // User requirement: +$1 take profit, -$0.5 stop loss (1:2 risk/reward)
-    private final double fixedTakeProfitDollar = 1.0; // $1 profit target
-    private final double fixedStopLossDollar = 0.5; // $0.5 loss limit
+    // Configuration for Active Trading (Percentage-based)
+    private final double takeProfitPercent;
+    private final double stopLossPercent;
+    private final double trailingStopPercent;
     private final double minPositionUsdt = 5.0; // Ignore positions smaller than $5 (Dust)
+
+    // Commission Rate (0.04% Entry + 0.04% Exit = 0.08%)
+    private final double COMMISSION_RATE = 0.0008;
 
     public PositionTracker(TradeRepository tradeRepository, RiskManager riskManager) {
         this.tradeRepository = tradeRepository;
         this.riskManager = riskManager;
-        logger.info("Position Tracker initialized (TP: +${}, SL: -${})",
-                fixedTakeProfitDollar, fixedStopLossDollar);
+
+        // Load TP/SL/Trailing from config
+        this.takeProfitPercent = Config.getDouble("strategy.tp.percent", 0.006); // Default 0.6%
+        this.stopLossPercent = Config.getDouble("strategy.sl.percent", 0.003); // Default 0.3%
+        this.trailingStopPercent = Config.getDouble("strategy.trailing.stop.percent", 0.002); // Default 0.2%
+
+        logger.info("Position Tracker initialized (TP: {}%, SL: {}%, Trailing: {}%)",
+                String.format("%.2f", takeProfitPercent * 100),
+                String.format("%.2f", stopLossPercent * 100),
+                String.format("%.2f", trailingStopPercent * 100));
     }
 
     /**
-     * Track a new position with fixed dollar TP/SL
+     * Track a new position with percentage-based TP/SL
      */
     public void trackPosition(String symbol, String side, double entryPrice, double quantity) {
-        // Calculate TP/SL prices based on fixed dollar amounts
-        // For LONG: TP when profit = +$1, SL when loss = -$1
-        // For SHORT: TP when profit = +$1, SL when loss = -$1
-
-        double profitPerUnit = fixedTakeProfitDollar / quantity;
-        double lossPerUnit = fixedStopLossDollar / quantity;
-
-        double stopLoss = side.equals("BUY")
-                ? entryPrice - lossPerUnit
-                : entryPrice + lossPerUnit;
-
-        double takeProfit = side.equals("BUY")
-                ? entryPrice + profitPerUnit
-                : entryPrice - profitPerUnit;
-
-        Position position = new Position(symbol, side, entryPrice, quantity, stopLoss, takeProfit);
+        Position position = new Position(symbol, side, entryPrice, quantity);
         activePositions.put(symbol, position);
 
-        // Register with RiskManager (use minimal trailing)
-        riskManager.registerPosition(
-                symbol,
-                BigDecimal.valueOf(entryPrice),
-                BigDecimal.valueOf(0.001)); // Minimal trailing (0.1%)
+        // Register with RiskManager for Trailing Stop
+        riskManager.registerPosition(symbol, BigDecimal.valueOf(entryPrice), BigDecimal.valueOf(trailingStopPercent));
 
         // Persist to MongoDB
         savePositionToDb(position);
 
-        logger.info("Tracking position: {} {} @ {} x{} (SL: ${}, TP: ${})",
+        logger.info("Tracking position: {} {} @ {} x{} (TP: +{}%, SL: -{}%)",
                 side, symbol, entryPrice, quantity,
-                String.format("%.2f", entryPrice - stopLoss),
-                String.format("%.2f", takeProfit - entryPrice));
+                String.format("%.2f", takeProfitPercent * 100),
+                String.format("%.2f", stopLossPercent * 100));
     }
 
     /**
-     * Check if position should be closed based on $1 stop-loss or take-profit
+     * Check if a position should be closed based on TP/SL
      */
     public PositionAction checkPosition(String symbol, double currentPrice) {
         Position position = activePositions.get(symbol);
-        if (position == null)
+        if (position == null) {
             return PositionAction.HOLD;
-
-        // Calculate current P&L in dollars
-        double pnl;
-        if (position.side.equals("BUY")) {
-            pnl = (currentPrice - position.entryPrice) * position.quantity;
-        } else {
-            pnl = (position.entryPrice - currentPrice) * position.quantity;
         }
 
-        // Stop-loss: Exit if loss >= $1
-        if (pnl <= -fixedStopLossDollar) {
-            logger.warn("⛔ Stop-loss triggered for {}: P&L=${} (threshold: -${})",
-                    symbol, String.format("%.2f", pnl), fixedStopLossDollar);
+        // Calculate P&L Percentage
+        double entryPrice = position.entryPrice;
+        double priceDiff = (currentPrice - entryPrice);
+
+        // Adjust for SHORT positions
+        if (position.side.equals("SELL")) {
+            priceDiff = (entryPrice - currentPrice);
+        }
+
+        double grossPnlPercent = priceDiff / entryPrice;
+        double netPnlPercent = grossPnlPercent - COMMISSION_RATE;
+
+        // Check Stop Loss
+        if (netPnlPercent <= -stopLossPercent) {
+            logger.warn("⛔ Stop-loss triggered for {}: Net P&L={:.2f}% (Threshold: -{:.2f}%)",
+                    symbol, netPnlPercent * 100, stopLossPercent * 100);
             return PositionAction.CLOSE_STOP_LOSS;
         }
 
-        // Take-profit: Exit if profit >= $1
-        if (pnl >= fixedTakeProfitDollar) {
-            logger.info("✅ Take-profit triggered for {}: P&L=${} (threshold: +${})",
-                    symbol, String.format("%.2f", pnl), fixedTakeProfitDollar);
+        // Check Take Profit
+        if (netPnlPercent >= takeProfitPercent) {
+            logger.info("✅ Take-profit triggered for {}: Net P&L={:.2f}% (Threshold: +{:.2f}%)",
+                    symbol, netPnlPercent * 100, takeProfitPercent * 100);
             return PositionAction.CLOSE_TAKE_PROFIT;
         }
 
@@ -194,14 +193,23 @@ public class PositionTracker {
             return 0.0;
         }
 
-        double pnl;
+        // Calculate gross P&L
+        double grossPnl;
         if (position.side.equals("BUY")) {
-            pnl = (currentPrice - position.entryPrice) * position.quantity;
+            grossPnl = (currentPrice - position.entryPrice) * position.quantity;
         } else {
-            pnl = (position.entryPrice - currentPrice) * position.quantity;
+            grossPnl = (position.entryPrice - currentPrice) * position.quantity;
         }
 
-        return pnl;
+        // Deduct commission (0.08% total: entry 0.04% + exit 0.04%)
+        double entryNotional = position.entryPrice * position.quantity;
+        double exitNotional = currentPrice * position.quantity;
+        double entryCommission = entryNotional * 0.0004;
+        double exitCommission = exitNotional * 0.0004;
+        double totalCommission = entryCommission + exitCommission;
+
+        // Return NET P&L (after commission)
+        return grossPnl - totalCommission;
     }
 
     /**
@@ -214,8 +222,6 @@ public class PositionTracker {
                     .append("side", position.side)
                     .append("entryPrice", position.entryPrice)
                     .append("quantity", position.quantity)
-                    .append("stopLoss", position.stopLoss)
-                    .append("takeProfit", position.takeProfit)
                     .append("entryTime", position.entryTime)
                     .append("status", "OPEN");
 
@@ -244,18 +250,13 @@ public class PositionTracker {
         public final String side;
         public final double entryPrice;
         public final double quantity;
-        public final double stopLoss;
-        public final double takeProfit;
         public final String entryTime;
 
-        public Position(String symbol, String side, double entryPrice, double quantity,
-                double stopLoss, double takeProfit) {
+        public Position(String symbol, String side, double entryPrice, double quantity) {
             this.symbol = symbol;
             this.side = side;
             this.entryPrice = entryPrice;
             this.quantity = quantity;
-            this.stopLoss = stopLoss;
-            this.takeProfit = takeProfit;
             this.entryTime = Instant.now().toString();
         }
     }

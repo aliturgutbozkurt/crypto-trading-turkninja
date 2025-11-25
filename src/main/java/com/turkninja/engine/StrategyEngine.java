@@ -2,6 +2,8 @@ package com.turkninja.engine;
 
 import com.turkninja.infra.FuturesBinanceService;
 import com.turkninja.infra.FuturesWebSocketService;
+import com.turkninja.web.service.WebSocketPushService;
+import com.turkninja.web.dto.SignalDTO;
 import com.turkninja.config.Config;
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -26,10 +28,13 @@ public class StrategyEngine {
     private final IndicatorService indicatorService;
     private final RiskManager riskManager;
     private final PositionTracker positionTracker;
+    private final OrderBookService orderBookService;
+    private WebSocketPushService webSocketPushService; // Optional, for UI notifications
 
     private List<String> tradingSymbols = Arrays.asList(
             "ETHUSDT", "SOLUSDT", "DOGEUSDT", "XRPUSDT", "BCHUSDT", "ATOMUSDT",
-            "ALGOUSDT", "DOTUSDT", "AVAXUSDT", "LINKUSDT", "BNBUSDT");
+            "ALGOUSDT", "DOTUSDT", "AVAXUSDT", "LINKUSDT", "BNBUSDT",
+            "ADAUSDT", "NEARUSDT", "SANDUSDT", "MANAUSDT", "ARBUSDT");
 
     private ScheduledExecutorService tradingScheduler;
     private volatile boolean tradingActive = false;
@@ -39,19 +44,42 @@ public class StrategyEngine {
     // private static final double MIN_POSITION_USDT = 4.0; // Moved to Config
 
     public StrategyEngine(FuturesBinanceService futuresService, FuturesWebSocketService webSocketService,
-            IndicatorService indicatorService, RiskManager riskManager, PositionTracker positionTracker) {
+            IndicatorService indicatorService, RiskManager riskManager, PositionTracker positionTracker,
+            OrderBookService orderBookService) {
         this.futuresService = futuresService;
         this.webSocketService = webSocketService;
         this.indicatorService = indicatorService;
         this.riskManager = riskManager;
         this.positionTracker = positionTracker;
+        this.orderBookService = orderBookService;
+        // Load configurable entry filter parameters
+        this.rsiLongMin = Config.getDouble("strategy.rsi.long.min", 40.0);
+        this.rsiLongMax = Config.getDouble("strategy.rsi.long.max", 80.0);
+        this.rsiShortMin = Config.getDouble("strategy.rsi.short.min", 20.0);
+        this.rsiShortMax = Config.getDouble("strategy.rsi.short.max", 60.0);
+        this.macdSignalTolerance = Config.getDouble("strategy.macd.signal.tolerance", 0.0005);
     }
+
+    // Configurable entry filter parameters
+    private double rsiLongMin;
+    private double rsiLongMax;
+    private double rsiShortMin;
+    private double rsiShortMax;
+    private double macdSignalTolerance;
 
     private volatile String btcTrend = "NEUTRAL"; // BULLISH, BEARISH, NEUTRAL
 
     // Anti-reversal mechanism: Track recently closed positions
     private final Map<String, Long> symbolCooldown = new ConcurrentHashMap<>();
     private final long COOLDOWN_MILLIS = 3 * 60 * 1000; // 3 minutes cooldown after closing position
+
+    /**
+     * Set WebSocket push service for UI signal notifications (optional)
+     */
+    public void setWebSocketPushService(WebSocketPushService webSocketPushService) {
+        this.webSocketPushService = webSocketPushService;
+        logger.info("WebSocket push service connected for signal notifications");
+    }
 
     public void startAutomatedTrading() {
         if (tradingActive) {
@@ -63,7 +91,7 @@ public class StrategyEngine {
         // Use a single thread for scheduling, but spawn Virtual Threads for execution
         tradingScheduler = Executors.newSingleThreadScheduledExecutor();
 
-        // Schedule analysis for all symbols every 1 minute (using latest 15m candles)
+        // Schedule analysis for all symbols every 1 minute (using latest 5m candles)
         tradingScheduler.scheduleAtFixedRate(() -> {
             try {
                 if (tradingActive) {
@@ -113,7 +141,7 @@ public class StrategyEngine {
         try {
             String symbol = "BTCUSDT";
             // Get klines from WebSocket cache (NO REST API CALL)
-            List<JSONObject> klines = webSocketService.getCachedKlines(symbol, 100);
+            List<JSONObject> klines = webSocketService.getCachedKlines(symbol, "5m", 100);
             if (klines.isEmpty()) {
                 logger.warn("No cached klines for {}, skipping analysis", symbol);
                 return;
@@ -164,70 +192,89 @@ public class StrategyEngine {
                 symbolCooldown.remove(symbol);
             }
 
-            // 2. Log BTC trend but don't block on NEUTRAL (was causing zero trades)
-            logger.info("BTC Trend: {} - Analyzing altcoin {}", btcTrend, symbol);
+            // 3. Fetch Data (5m only)
+            List<JSONObject> klines5m = webSocketService.getCachedKlines(symbol, "5m", 100);
 
-            // 2. Fetch Data from WebSocket cache (NO REST API CALL)
-            List<JSONObject> klines = webSocketService.getCachedKlines(symbol, 100);
-            if (klines.isEmpty()) {
-                logger.warn("No cached klines for {}, skipping analysis", symbol);
+            if (klines5m.isEmpty()) {
+                logger.warn("Insufficient cached klines for {} (5m: {}), skipping",
+                        symbol, klines5m.size());
                 return;
             }
-            BarSeries series = convertCachedKlinesToBarSeries(symbol, klines);
 
-            // 3. Calculate Indicators
-            Map<String, Double> indicators = indicatorService.calculateIndicators(series);
+            BarSeries series5m = convertCachedKlinesToBarSeries(symbol, klines5m);
 
-            // 4. Get Current Price and RSI
-            double currentPrice = series.getLastBar().getClosePrice().doubleValue();
-            double rsi = indicators.getOrDefault("RSI", 50.0);
+            // 4. Calculate Indicators
+            Map<String, Double> indicators5m = indicatorService.calculateIndicators(series5m);
 
-            // Get scalping indicators
-            double ema9 = indicators.getOrDefault("EMA_9", currentPrice);
-            double ema21 = indicators.getOrDefault("EMA_21", currentPrice);
-            double volumeRatio = indicators.getOrDefault("VOLUME_RATIO", 0.0);
-            double atrPercent = indicators.getOrDefault("ATR_PERCENT", 0.0);
+            // 5. Get Values
+            double currentPrice = series5m.getLastBar().getClosePrice().doubleValue();
 
-            logger.info("{} | Price={} | RSI={} | EMA21={} | Vol={} | BTC={}",
-                    symbol, currentPrice, rsi, ema21, volumeRatio, btcTrend);
+            // 5m Trend Indicators
+            double ema50_5m = indicators5m.getOrDefault("EMA_50", currentPrice);
+            double rsi_5m = indicators5m.getOrDefault("RSI", 50.0);
+            double macd = indicators5m.getOrDefault("MACD", 0.0);
+            double macdSignal = indicators5m.getOrDefault("MACD_SIGNAL", 0.0);
 
-            // STRATEGY WITHOUT BTC FILTER (EMERGENCY FIX)
-            // BTC trend filter was causing false signals and 30% loss
-            // TODO: Implement better BTC trend detection
+            logger.info("{} | Price={} | 5m[RSI={:.1f}, EMA50={:.2f}, MACD={:.4f}/{:.4f}]",
+                    symbol, currentPrice, rsi_5m, ema50_5m, macd, macdSignal);
 
-            // LONG: Uptrend + RSI not extreme
+            // --- 5-MINUTE STRATEGY (Trend + Momentum) ---
+
+            // LONG Logic:
+            // 1. Trend: Price > EMA 50
+            // 2. Momentum: RSI > 50 (Bullish) AND RSI < 70 (Not Overbought)
+            // 3. Confirmation: MACD > Signal (Bullish Alignment)
+
             boolean isBuySignal = false;
             String buyReason = "";
 
-            if (currentPrice > ema21 && rsi > 30 && rsi < 70) {
+            boolean trendUp = currentPrice > ema50_5m;
+            boolean momentumUp = rsi_5m > rsiLongMin && rsi_5m < rsiLongMax;
+            boolean macdBullish = macd > (macdSignal + macdSignalTolerance);
+
+            if (trendUp && momentumUp && macdBullish) {
                 isBuySignal = true;
-                buyReason = String.format("LONG: Price>EMA + RSI(%.0f)", rsi);
-                logger.info("🟢 {} LONG", symbol);
+                buyReason = String.format(
+                        "LONG: Trend UP (Price>EMA50) + Momentum (RSI %.0f) + MACD Bullish",
+                        rsi_5m);
+                logger.info("🟢 {} LONG Signal", symbol);
             }
 
             if (isBuySignal) {
-                String msg = String.format("🟢 BUY SIGNAL for %s: %s (Price=%.2f, EMA=%.2f)",
-                        symbol, buyReason, currentPrice, ema21);
+                String msg = String.format("🟢 BUY SIGNAL for %s: %s (Price=%.2f)", symbol, buyReason, currentPrice);
                 logger.info(msg);
                 System.out.println(msg);
+                // Push signal to UI before executing
+                pushSignal(symbol, "BUY", buyReason, currentPrice, true, "PENDING");
                 executeEntry(symbol, "BUY", currentPrice);
             }
 
-            // SHORT: Downtrend + RSI not extreme
+            // SHORT Logic:
+            // 1. Trend: Price < EMA 50
+            // 2. Momentum: RSI < 50 (Bearish) AND RSI > 30 (Not Oversold)
+            // 3. Confirmation: MACD < Signal (Bearish Alignment)
+
             boolean isSellSignal = false;
             String sellReason = "";
 
-            if (currentPrice < ema21 && rsi > 30 && rsi < 70) {
+            boolean trendDown = currentPrice < ema50_5m;
+            boolean momentumDown = rsi_5m < rsiShortMax && rsi_5m > rsiShortMin;
+            boolean macdBearish = macd < (macdSignal - macdSignalTolerance);
+
+            if (trendDown && momentumDown && macdBearish) {
                 isSellSignal = true;
-                sellReason = String.format("SHORT: Price<EMA + RSI(%.0f)", rsi);
-                logger.info("🔴 {} SHORT", symbol);
+                sellReason = String.format(
+                        "SHORT: Trend DOWN (Price<EMA50) + Momentum (RSI %.0f) + MACD Bearish",
+                        rsi_5m);
+                logger.info("🔴 {} SHORT Signal", symbol);
             }
 
             if (isSellSignal) {
-                String msg = String.format("🔴 SELL SIGNAL for %s: %s (Price=%.2f, EMA9=%.2f, EMA21=%.2f)",
-                        symbol, sellReason, currentPrice, ema9, ema21);
+                String msg = String.format("🔴 SELL SIGNAL for %s: %s (Price=%.2f)", symbol, sellReason, currentPrice);
                 logger.info(msg);
                 System.out.println(msg);
+                // Push signal to UI before executing
+                pushSignal(symbol, "SELL", sellReason, currentPrice, true, "PENDING");
                 executeEntry(symbol, "SELL", currentPrice);
             }
 
@@ -244,33 +291,48 @@ public class StrategyEngine {
 
             if (positionSize < minPositionUsdt) {
                 logger.warn("Position size too small for {}: ${}", symbol, positionSize);
+                pushSignal(symbol, side, "Blocked: Position Size Too Small (<$4)", price, false, "BLOCKED_SIZE");
                 return;
             }
 
             // 2. Check risk limits
             if (!riskManager.canOpenPosition(positionSize)) {
                 logger.warn("Risk limits prevent opening position for {}", symbol);
+                pushSignal(symbol, side, "Blocked: Risk Limits (Max Pos/Daily Loss)", price, false, "BLOCKED_RISK");
                 return;
             }
 
-            // 3. Calculate quantity (with 20x leverage)
+            // 3. Check Order Book slippage
+            if (!orderBookService.isSlippageAcceptable(symbol, side, positionSize, price)) {
+                logger.warn("⚠️ {} Order Book slippage too high - trade blocked", symbol);
+                pushSignal(symbol, side, "Blocked: High Slippage (>0.5%)", price, false, "BLOCKED_SLIPPAGE");
+                return;
+            }
+
+            // 4. Calculate quantity (with 20x leverage)
             double quantity = calculateQuantity(symbol, positionSize, price);
 
-            logger.info("Opening {} position: {} @ ${} (Size: ${}, Qty: {})",
-                    side, symbol, price, positionSize, quantity);
+            // 5. Calculate Binance commission (0.04% for market orders, both entry and
+            // exit)
+            double notionalValue = quantity * price; // Actual position value
+            double entryCommission = notionalValue * 0.0004; // 0.04% entry fee
+            double exitCommission = notionalValue * 0.0004; // 0.04% exit fee (estimated)
+            double totalCommission = entryCommission + exitCommission; // Total estimated fees
 
-            // 4. Place order
-            String orderResult = futuresService.placeOrder(
-                    symbol,
-                    side.equals("BUY") ? "BUY" : "SELL",
-                    quantity);
+            logger.info("Opening {} position: {} @ ${} (Size: ${}, Qty: {}, Commission: ${})",
+                    side, symbol, price, positionSize, quantity, String.format("%.4f", totalCommission));
 
-            logger.info("Order placed for {}: {}", symbol, orderResult);
+            // 6. Place Order
+            String orderId = futuresService.placeMarketOrder(symbol, side, quantity);
+            logger.info("✅ Order placed for {}: {} {} @ {}", symbol, side, quantity, price);
 
-            // 5. Track position
+            // 7. Track Position
             positionTracker.trackPosition(symbol, side, price, quantity);
 
-            // 6. Alert: Sound + Red console output
+            // 8. Update Signal Status to EXECUTED
+            pushSignal(symbol, side, "Trade Executed Successfully", price, true, "EXECUTED");
+
+            // 9. Alert: Sound + Red console output
             System.out.print("\007"); // System beep
             String redColor = "\u001B[31m";
             String resetColor = "\u001B[0m";
@@ -279,10 +341,15 @@ public class StrategyEngine {
             System.out.println(boldRed + "🚨 POSITION OPENED: " + side + " " + symbol + " @ $" + price + resetColor);
             System.out.println(
                     boldRed + "   Size: $" + String.format("%.2f", positionSize) + " | Qty: " + quantity + resetColor);
+            System.out.println(
+                    boldRed + "   Binance Fee: $" + String.format("%.4f", totalCommission) + " (Entry: $"
+                            + String.format("%.4f", entryCommission) + " + Exit: $"
+                            + String.format("%.4f", exitCommission) + ")" + resetColor);
             System.out.println(boldRed + "═══════════════════════════════════════════════════════════" + resetColor);
 
         } catch (Exception e) {
-            logger.error("Error executing entry for " + symbol, e);
+            logger.error("Failed to execute entry for " + symbol, e);
+            pushSignal(symbol, side, "Execution Failed: " + e.getMessage(), price, false, "FAILED");
         }
     }
 
@@ -331,7 +398,7 @@ public class StrategyEngine {
     public void analyze(String symbol) {
         try {
             // 1. Fetch Data from WebSocket cache (NO REST API CALL)
-            List<JSONObject> klines = webSocketService.getCachedKlines(symbol, 100);
+            List<JSONObject> klines = webSocketService.getCachedKlines(symbol, "5m", 100);
             if (klines.isEmpty()) {
                 logger.warn("No cached klines for {}, skipping analysis", symbol);
                 return;
@@ -407,6 +474,20 @@ public class StrategyEngine {
             indicatorService.addBar(series, time, open, high, low, close, volume);
         }
         return series;
+    }
+
+    /**
+     * Push trading signal to UI via WebSocket (if connected)
+     */
+    private void pushSignal(String symbol, String type, String reason, double price, boolean executed, String status) {
+        if (webSocketPushService != null) {
+            try {
+                SignalDTO signal = new SignalDTO(symbol, type, reason, price, executed, status);
+                webSocketPushService.pushSignal(signal);
+            } catch (Exception e) {
+                logger.error("Failed to push signal to UI", e);
+            }
+        }
     }
 
     public void shutdown() {

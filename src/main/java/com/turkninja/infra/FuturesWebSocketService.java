@@ -29,6 +29,7 @@ public class FuturesWebSocketService {
     private WebSocket userDataWebSocket;
     private WebSocket markPriceWebSocket;
     private WebSocket klineWebSocket;
+    private WebSocket depthWebSocket;
     private String listenKey;
 
     private Consumer<JSONObject> accountUpdateListener;
@@ -41,6 +42,10 @@ public class FuturesWebSocketService {
     private volatile JSONArray cachedPositions;
     private final Map<String, LinkedList<JSONObject>> klineCache = new ConcurrentHashMap<>();
     private final List<Consumer<JSONArray>> positionCacheListeners = new java.util.concurrent.CopyOnWriteArrayList<>();
+    private final Map<String, Double> markPriceCache = new ConcurrentHashMap<>();
+
+    // Order Book Service (for depth stream)
+    private com.turkninja.engine.OrderBookService orderBookService;
 
     /**
      * Set account info cache (used for initial REST fallback).
@@ -78,8 +83,14 @@ public class FuturesWebSocketService {
      * This is used for the initial REST fallback before WebSocket streams fill the
      * cache.
      */
-    public void addKlinesToCache(String symbol, List<JSONObject> klines) {
-        LinkedList<JSONObject> list = klineCache.computeIfAbsent(symbol, k -> new LinkedList<>());
+    /**
+     * Add a list of klines to the cache for a symbol and interval.
+     * This is used for the initial REST fallback before WebSocket streams fill the
+     * cache.
+     */
+    public void addKlinesToCache(String symbol, String interval, List<JSONObject> klines) {
+        String cacheKey = symbol + "_" + interval;
+        LinkedList<JSONObject> list = klineCache.computeIfAbsent(cacheKey, k -> new LinkedList<>());
         list.clear();
         list.addAll(klines);
         // Trim to max size
@@ -151,14 +162,20 @@ public class FuturesWebSocketService {
     /**
      * Start Kline (candlestick) stream for technical analysis
      */
+    /**
+     * Start Kline (candlestick) stream for technical analysis
+     * Subscribes to both 1m and 5m candles for all symbols
+     */
     public void startKlineStream(List<String> symbols) {
         try {
-            // Build combined stream URL for 15-minute klines
+            // Build combined stream URL for 5-minute klines only
             StringBuilder streamBuilder = new StringBuilder(WS_BASE_URL + "/stream?streams=");
             for (int i = 0; i < symbols.size(); i++) {
-                if (i > 0)
+                if (i > 0) {
                     streamBuilder.append("/");
-                streamBuilder.append(symbols.get(i).toLowerCase()).append("@kline_15m");
+                }
+                String symbol = symbols.get(i).toLowerCase();
+                streamBuilder.append(symbol).append("@kline_5m");
             }
 
             String wsUrl = streamBuilder.toString();
@@ -167,7 +184,7 @@ public class FuturesWebSocketService {
             klineWebSocket = httpClient.newWebSocket(request, new WebSocketListener() {
                 @Override
                 public void onOpen(WebSocket webSocket, Response response) {
-                    logger.info("Kline stream connected for {} symbols", symbols.size());
+                    logger.info("Kline stream connected for {} symbols (1m & 5m)", symbols.size());
                 }
 
                 @Override
@@ -186,267 +203,7 @@ public class FuturesWebSocketService {
         }
     }
 
-    /**
-     * Start mark price stream for liquidation monitoring
-     */
-    public void startMarkPriceStream(String... symbols) {
-        try {
-            // Build combined stream URL
-            StringBuilder streamBuilder = new StringBuilder(WS_BASE_URL + "/stream?streams=");
-            for (int i = 0; i < symbols.length; i++) {
-                if (i > 0)
-                    streamBuilder.append("/");
-                streamBuilder.append(symbols[i].toLowerCase()).append("@markPrice@1s");
-            }
-
-            String wsUrl = streamBuilder.toString();
-            Request request = new Request.Builder().url(wsUrl).build();
-
-            markPriceWebSocket = httpClient.newWebSocket(request, new WebSocketListener() {
-                @Override
-                public void onOpen(WebSocket webSocket, Response response) {
-                    logger.info("Mark price stream connected for {} symbols", symbols.length);
-                }
-
-                @Override
-                public void onMessage(WebSocket webSocket, String text) {
-                    handleMarkPriceMessage(text);
-                }
-
-                @Override
-                public void onFailure(WebSocket webSocket, Throwable t, Response response) {
-                    logger.error("Mark price stream failed", t);
-                }
-            });
-
-        } catch (Exception e) {
-            logger.error("Failed to start mark price stream", e);
-        }
-    }
-
-    /**
-     * Get listen key for user data stream
-     */
-    private String getListenKey() {
-        try {
-            Request request = new Request.Builder()
-                    .url("https://fapi.binance.com/fapi/v1/listenKey")
-                    .post(RequestBody.create("", null))
-                    .addHeader("X-MBX-APIKEY", apiKey)
-                    .build();
-
-            try (Response response = httpClient.newCall(request).execute()) {
-                if (response.isSuccessful() && response.body() != null) {
-                    JSONObject json = new JSONObject(response.body().string());
-                    return json.getString("listenKey");
-                }
-            }
-        } catch (Exception e) {
-            logger.error("Failed to get listen key", e);
-        }
-        return null;
-    }
-
-    /**
-     * Keep listen key alive by sending PUT request every 30 minutes
-     */
-    private void startListenKeyKeepAlive() {
-        new Thread(() -> {
-            while (userDataWebSocket != null) {
-                try {
-                    Thread.sleep(30 * 60 * 1000); // 30 minutes
-
-                    Request request = new Request.Builder()
-                            .url("https://fapi.binance.com/fapi/v1/listenKey")
-                            .put(RequestBody.create("", null))
-                            .addHeader("X-MBX-APIKEY", apiKey)
-                            .build();
-
-                    try (Response response = httpClient.newCall(request).execute()) {
-                        if (response.isSuccessful()) {
-                            logger.debug("Listen key kept alive");
-                        } else {
-                            logger.warn("Failed to keep listen key alive");
-                        }
-                    }
-                } catch (InterruptedException e) {
-                    break;
-                } catch (Exception e) {
-                    logger.error("Error keeping listen key alive", e);
-                }
-            }
-        }, "ListenKeyKeepAlive").start();
-    }
-
-    /**
-     * Handle user data stream messages
-     */
-    private void handleUserDataMessage(String text) {
-        try {
-            JSONObject json = new JSONObject(text);
-            String eventType = json.getString("e");
-
-            switch (eventType) {
-                case "ACCOUNT_UPDATE":
-                    logger.debug("Account update received");
-
-                    // Update cached account info
-                    if (json.has("a")) {
-                        JSONObject accountData = json.getJSONObject("a");
-
-                        // Build account info cache
-                        if (cachedAccountInfo == null) {
-                            cachedAccountInfo = new JSONObject();
-                        }
-
-                        // Update balances
-                        if (accountData.has("B")) {
-                            JSONArray balances = accountData.getJSONArray("B");
-                            for (int i = 0; i < balances.length(); i++) {
-                                JSONObject balance = balances.getJSONObject(i);
-                                if ("USDT".equals(balance.getString("a"))) {
-                                    cachedAccountInfo.put("totalWalletBalance", balance.getDouble("wb"));
-                                    cachedAccountInfo.put("availableBalance", balance.getDouble("bc"));
-                                    // cw is Cross Wallet Balance, we'll calculate totalMarginBalance (Equity) later
-                                }
-                            }
-                        }
-
-                        // Update positions cache (Merge logic)
-                        if (accountData.has("P")) {
-                            JSONArray updatedPositions = accountData.getJSONArray("P");
-
-                            // Initialize cache if null
-                            if (cachedPositions == null) {
-                                cachedPositions = new JSONArray();
-                            }
-
-                            // Create a map of existing positions for easy lookup/update
-                            Map<String, JSONObject> positionMap = new HashMap<>();
-                            for (int i = 0; i < cachedPositions.length(); i++) {
-                                JSONObject pos = cachedPositions.getJSONObject(i);
-                                positionMap.put(pos.getString("symbol"), pos);
-                            }
-
-                            // Process updates
-                            for (int i = 0; i < updatedPositions.length(); i++) {
-                                JSONObject update = updatedPositions.getJSONObject(i);
-                                String symbol = update.getString("s");
-                                double posAmt = update.getDouble("pa");
-                                double entryPrice = update.getDouble("ep");
-                                double unrealizedProfit = update.getDouble("up");
-
-                                if (posAmt != 0) {
-                                    // Update or add position
-                                    JSONObject pos = positionMap.getOrDefault(symbol, new JSONObject());
-                                    pos.put("symbol", symbol);
-                                    pos.put("positionAmt", posAmt);
-                                    pos.put("entryPrice", entryPrice);
-                                    pos.put("unRealizedProfit", unrealizedProfit); // Ensure casing matches what
-                                                                                   // Controller expects
-                                    pos.put("unrealizedProfit", unrealizedProfit); // Add both casings to be safe
-                                    positionMap.put(symbol, pos);
-                                } else {
-                                    // Remove closed position
-                                    positionMap.remove(symbol);
-                                }
-                            }
-
-                            // Rebuild cachedPositions array
-                            cachedPositions = new JSONArray();
-                            double totalUnrealizedPnL = 0.0;
-
-                            for (JSONObject pos : positionMap.values()) {
-                                cachedPositions.put(pos);
-                                totalUnrealizedPnL += pos.optDouble("unRealizedProfit", 0.0);
-                            }
-
-                            // Update Account PnL and Margin Balance
-                            cachedAccountInfo.put("totalUnrealizedProfit", totalUnrealizedPnL);
-                            double walletBalance = cachedAccountInfo.optDouble("totalWalletBalance", 0.0);
-                            cachedAccountInfo.put("totalMarginBalance", walletBalance + totalUnrealizedPnL);
-
-                            logger.debug("Updated cache: {} positions, Total PnL: {}", cachedPositions.length(),
-                                    totalUnrealizedPnL);
-                            notifyPositionCacheListeners();
-                        }
-                    }
-
-                    if (accountUpdateListener != null) {
-                        accountUpdateListener.accept(json);
-                    }
-                    break;
-
-                case "ORDER_TRADE_UPDATE":
-                    logger.debug("Order update received");
-                    if (orderUpdateListener != null) {
-                        orderUpdateListener.accept(json);
-                    }
-                    break;
-
-                case "ACCOUNT_CONFIG_UPDATE":
-                    logger.debug("Account config update received");
-                    break;
-
-                default:
-                    logger.debug("Unknown event type: {}", eventType);
-            }
-
-            // Notify position update listener
-            if (eventType.equals("ACCOUNT_UPDATE") && json.has("a")) {
-                JSONObject accountData = json.getJSONObject("a");
-                if (accountData.has("P") && positionUpdateListener != null) {
-                    positionUpdateListener.accept(json);
-                }
-            }
-
-        } catch (
-
-        Exception e) {
-            logger.error("Error handling user data message", e);
-        }
-    }
-
-    // Data caches (to avoid REST API calls)
-    // private volatile JSONObject cachedAccountInfo; // Already defined
-    // private volatile JSONArray cachedPositions; // Already defined
-    // private final Map<String, LinkedList<JSONObject>> klineCache = new
-    // ConcurrentHashMap<>(); // Already defined
-    private final Map<String, Double> markPriceCache = new ConcurrentHashMap<>();
-    // private final List<Consumer<JSONArray>> positionCacheListeners = new
-    // java.util.concurrent.CopyOnWriteArrayList<>(); // Already defined
-
     // ... (existing code) ...
-
-    /**
-     * Handle mark price stream messages
-     */
-    private void handleMarkPriceMessage(String text) {
-        try {
-            JSONObject json = new JSONObject(text);
-            if (json.has("data")) {
-                JSONObject data = json.getJSONObject("data");
-                String symbol = data.getString("s");
-                double price = data.getDouble("p");
-
-                // Update cache
-                markPriceCache.put(symbol, price);
-
-                if (markPriceUpdateListener != null) {
-                    markPriceUpdateListener.accept(data);
-                }
-            }
-        } catch (Exception e) {
-            logger.error("Error handling mark price message", e);
-        }
-    }
-
-    /**
-     * Get cached mark price for a symbol
-     */
-    public double getMarkPrice(String symbol) {
-        return markPriceCache.getOrDefault(symbol, 0.0);
-    }
 
     /**
      * Handle kline stream messages and update cache
@@ -458,6 +215,7 @@ public class FuturesWebSocketService {
                 JSONObject data = json.getJSONObject("data");
                 JSONObject kline = data.getJSONObject("k");
                 String symbol = kline.getString("s");
+                String interval = kline.getString("i"); // Get interval (1m, 5m, etc.)
 
                 // Only store closed candles
                 if (kline.getBoolean("x")) {
@@ -471,9 +229,10 @@ public class FuturesWebSocketService {
                     simplifiedKline.put("volume", kline.getString("v"));
                     simplifiedKline.put("closeTime", kline.getLong("T"));
 
-                    // Add to cache
-                    klineCache.computeIfAbsent(symbol, k -> new LinkedList<>());
-                    LinkedList<JSONObject> klines = klineCache.get(symbol);
+                    // Add to cache (Key: SYMBOL_INTERVAL)
+                    String cacheKey = symbol + "_" + interval;
+                    klineCache.computeIfAbsent(cacheKey, k -> new LinkedList<>());
+                    LinkedList<JSONObject> klines = klineCache.get(cacheKey);
                     klines.addLast(simplifiedKline);
 
                     // Keep only last MAX_KLINES_PER_SYMBOL
@@ -481,7 +240,7 @@ public class FuturesWebSocketService {
                         klines.removeFirst();
                     }
 
-                    logger.debug("Kline cached for {}: {} candles", symbol, klines.size());
+                    logger.debug("Kline cached for {}: {} candles", cacheKey, klines.size());
                 }
             }
         } catch (Exception e) {
@@ -490,13 +249,184 @@ public class FuturesWebSocketService {
     }
 
     /**
-     * Get cached klines for a symbol (avoids REST API call)
+     * Retrieve a new listen key via Binance REST API.
      */
-    public List<JSONObject> getCachedKlines(String symbol, int limit) {
-        LinkedList<JSONObject> klines = klineCache.get(symbol);
+    private String getListenKey() {
+        try {
+            Request request = new Request.Builder()
+                    .url("https://fapi.binance.com/fapi/v1/listenKey")
+                    .post(RequestBody.create("", null))
+                    .addHeader("X-MBX-APIKEY", apiKey)
+                    .build();
+            try (Response response = httpClient.newCall(request).execute()) {
+                if (response.isSuccessful() && response.body() != null) {
+                    JSONObject json = new JSONObject(response.body().string());
+                    return json.getString("listenKey");
+                }
+            }
+        } catch (Exception e) {
+            logger.error("Failed to obtain listen key", e);
+        }
+        return null;
+    }
+
+    /**
+     * Handle incoming user data stream messages.
+     */
+    private void handleUserDataMessage(String text) {
+        try {
+            JSONObject json = new JSONObject(text);
+            String eventType = json.optString("e", "");
+            switch (eventType) {
+                case "ACCOUNT_UPDATE":
+                    // WebSocket ACCOUNT_UPDATE has a different structure than REST API
+                    // Parse it and convert to REST API format for compatibility
+                    if (json.has("a")) {
+                        JSONObject accountUpdate = json.getJSONObject("a");
+
+                        // Calculate total wallet balance from balances array
+                        double totalWalletBalance = 0.0;
+                        if (accountUpdate.has("B")) {
+                            JSONArray balances = accountUpdate.getJSONArray("B");
+                            for (int i = 0; i < balances.length(); i++) {
+                                JSONObject balance = balances.getJSONObject(i);
+                                String asset = balance.getString("a");
+                                if ("USDT".equals(asset)) {
+                                    // Use cross wallet balance (cw) which is the available balance
+                                    totalWalletBalance = balance.getDouble("cw");
+                                    break;
+                                }
+                            }
+                        }
+
+                        // Create a REST API compatible account info object
+                        JSONObject restApiFormat = new JSONObject();
+                        restApiFormat.put("totalWalletBalance", totalWalletBalance);
+
+                        // Update cached account info
+                        cachedAccountInfo = restApiFormat;
+
+                        logger.debug("Account update: totalWalletBalance={}", totalWalletBalance);
+                    }
+                    if (accountUpdateListener != null) {
+                        accountUpdateListener.accept(json);
+                    }
+                    break;
+                case "ORDER_TRADE_UPDATE":
+                    if (orderUpdateListener != null) {
+                        orderUpdateListener.accept(json);
+                    }
+                    break;
+                default:
+                    break;
+            }
+        } catch (Exception e) {
+            logger.error("Error handling user data message", e);
+        }
+    }
+
+    /**
+     * Periodically send a keep-alive request for the listen key.
+     */
+    private void startListenKeyKeepAlive() {
+        new Thread(() -> {
+            while (userDataWebSocket != null) {
+                try {
+                    Thread.sleep(30 * 60 * 1000);
+                    Request request = new Request.Builder()
+                            .url("https://fapi.binance.com/fapi/v1/listenKey")
+                            .put(RequestBody.create("", null))
+                            .addHeader("X-MBX-APIKEY", apiKey)
+                            .build();
+                    try (Response response = httpClient.newCall(request).execute()) {
+                        if (!response.isSuccessful()) {
+                            logger.warn("Listen key keep-alive failed");
+                        }
+                    }
+                } catch (InterruptedException ie) {
+                    break;
+                } catch (Exception e) {
+                    logger.error("Error in listen key keep-alive", e);
+                }
+            }
+        }, "ListenKeyKeepAlive").start();
+    }
+
+    /**
+     * Start mark price stream for given symbols.
+     */
+    public void startMarkPriceStream(String... symbols) {
+        try {
+            StringBuilder streamBuilder = new StringBuilder(WS_BASE_URL + "/stream?streams=");
+            for (int i = 0; i < symbols.length; i++) {
+                if (i > 0)
+                    streamBuilder.append("/");
+                streamBuilder.append(symbols[i].toLowerCase()).append("@markPrice@1s");
+            }
+            String wsUrl = streamBuilder.toString();
+            Request request = new Request.Builder().url(wsUrl).build();
+            markPriceWebSocket = httpClient.newWebSocket(request, new WebSocketListener() {
+                @Override
+                public void onMessage(WebSocket webSocket, String text) {
+                    handleMarkPriceMessage(text);
+                }
+
+                @Override
+                public void onFailure(WebSocket webSocket, Throwable t, Response response) {
+                    logger.error("Mark price stream failed", t);
+                }
+            });
+        } catch (Exception e) {
+            logger.error("Failed to start mark price stream", e);
+        }
+    }
+
+    /**
+     * Handle mark price stream messages.
+     */
+    private void handleMarkPriceMessage(String text) {
+        try {
+            JSONObject json = new JSONObject(text);
+            if (json.has("data")) {
+                JSONObject data = json.getJSONObject("data");
+                String symbol = data.getString("s");
+                double markPrice = data.getDouble("p");
+                markPriceCache.put(symbol, markPrice);
+                logger.debug("Mark price updated: {} = {}", symbol, markPrice);
+                if (markPriceUpdateListener != null) {
+                    markPriceUpdateListener.accept(data);
+                }
+            }
+        } catch (Exception e) {
+            logger.error("Error handling mark price message: {}", text, e);
+        }
+    }
+
+    /**
+     * Get latest mark price for a symbol.
+     */
+    public double getMarkPrice(String symbol) {
+        double price = markPriceCache.getOrDefault(symbol, 0.0);
+        if (price == 0.0) {
+            logger.warn("Mark price cache MISS for {}, cache size: {}", symbol, markPriceCache.size());
+        }
+        return price;
+    }
+
+    /**
+     * Get cached klines for a symbol and interval (avoids REST API call)
+     */
+    public List<JSONObject> getCachedKlines(String symbol, String interval, int limit) {
+        String cacheKey = symbol + "_" + interval;
+        LinkedList<JSONObject> klines = klineCache.get(cacheKey);
         if (klines == null || klines.isEmpty()) {
-            logger.warn("No cached klines for {}", symbol);
-            return Collections.emptyList();
+            // Try fallback to just symbol if interval missing (legacy support)
+            if (klineCache.containsKey(symbol)) {
+                klines = klineCache.get(symbol);
+            } else {
+                logger.warn("No cached klines for {}", cacheKey);
+                return Collections.emptyList();
+            }
         }
 
         int size = klines.size();
@@ -569,6 +499,84 @@ public class FuturesWebSocketService {
     }
 
     /**
+     * Set OrderBookService for depth stream processing
+     */
+    public void setOrderBookService(com.turkninja.engine.OrderBookService orderBookService) {
+        this.orderBookService = orderBookService;
+    }
+
+    /**
+     * Start depth (order book) stream for given symbols
+     * Subscribes to @depth20@100ms for real-time market depth updates
+     */
+    public void startDepthStream(List<String> symbols) {
+        if (symbols == null || symbols.isEmpty()) {
+            logger.warn("No symbols provided for depth stream");
+            return;
+        }
+
+        // Build stream names: ethusdt@depth20@100ms/btcusdt@depth20@100ms/...
+        List<String> streams = symbols.stream()
+                .map(s -> s.toLowerCase() + "@depth20@100ms")
+                .toList();
+
+        String combinedStream = String.join("/", streams);
+        String wsUrl = WS_BASE_URL + "/stream?streams=" + combinedStream;
+
+        logger.info("Starting depth stream for {} symbols: {}", symbols.size(), symbols);
+
+        Request request = new Request.Builder().url(wsUrl).build();
+
+        depthWebSocket = httpClient.newWebSocket(request, new WebSocketListener() {
+            @Override
+            public void onOpen(WebSocket webSocket, Response response) {
+                logger.info("✅ Depth WebSocket connected");
+            }
+
+            @Override
+            public void onMessage(WebSocket webSocket, String text) {
+                try {
+                    handleDepthMessage(text);
+                } catch (Exception e) {
+                    logger.error("Error handling depth message", e);
+                }
+            }
+
+            @Override
+            public void onFailure(WebSocket webSocket, Throwable t, Response response) {
+                logger.error("Depth WebSocket error", t);
+            }
+        });
+    }
+
+    /**
+     * Handle depth stream messages and update OrderBookService
+     */
+    private void handleDepthMessage(String text) {
+        try {
+            JSONObject message = new JSONObject(text);
+
+            if (!message.has("stream") || !message.has("data")) {
+                return;
+            }
+
+            String stream = message.getString("stream");
+            JSONObject data = message.getJSONObject("data");
+
+            // Extract symbol from stream name (e.g., "ethusdt@depth20@100ms" -> "ETHUSDT")
+            String symbol = stream.split("@")[0].toUpperCase();
+
+            if (orderBookService != null) {
+                // Forward to OrderBookService for processing
+                orderBookService.processDepthUpdate(symbol, data);
+            }
+
+        } catch (Exception e) {
+            logger.error("Error parsing depth message", e);
+        }
+    }
+
+    /**
      * Close all WebSocket connections
      */
     public void close() {
@@ -579,6 +587,10 @@ public class FuturesWebSocketService {
         if (markPriceWebSocket != null) {
             markPriceWebSocket.close(1000, "Closing");
             markPriceWebSocket = null;
+        }
+        if (depthWebSocket != null) {
+            depthWebSocket.close(1000, "Closing");
+            depthWebSocket = null;
         }
         logger.info("WebSocket connections closed");
     }

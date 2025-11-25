@@ -12,8 +12,19 @@
 <body>
     <div class="container">
         <header>
-            <h1>🤖 TurkNinja Crypto Trading Bot</h1>
-            <p class="subtitle">Futures 20x Leverage - Automated Trading</p>
+            <div class="header-top">
+                <div class="brand">
+                    <h1>🤖 TurkNinja Bot</h1>
+                    <p class="subtitle">Futures 20x Leverage</p>
+                </div>
+                <div class="header-controls">
+                    <h2 class="section-title">Active Positions</h2>
+                    <div class="actions">
+                        <button onclick="reloadPositions()" class="btn btn-primary">🔄 Reload</button>
+                        <button onclick="emergencyExit()" class="btn btn-danger">🚨 Emergency Exit</button>
+                    </div>
+                </div>
+            </div>
         </header>
 
         <div class="stats-grid">
@@ -35,13 +46,7 @@
             </div>
         </div>
 
-        <div class="actions">
-            <button onclick="reloadPositions()" class="btn btn-primary">🔄 Reload Positions</button>
-            <button onclick="emergencyExit()" class="btn btn-danger">🚨 Emergency Exit</button>
-        </div>
-
         <div class="positions-section">
-            <h2>Active Positions</h2>
             <div id="statusMessage" class="status-message"></div>
             <table id="positionsTable">
                 <thead>
@@ -65,9 +70,15 @@
             </table>
         </div>
 
+        <!-- Trading Signals Section -->
+        <div class="signals-section">
+            <h3>📡 Trading Signals (Real-Time)</h3>
+            <div id="signalsList"></div>
+        </div>
+
         <footer>
             <p>Last updated: <span id="lastUpdate">Never</span></p>
-            <p class="disclaimer">⚠️ High-risk trading with 20x leverage. Auto stop-loss: -$0.50, Take-profit: +$1.00
+            <p class="disclaimer">⚠️ High-risk trading with 20x leverage. Auto SL: 0.3%, TP: 0.6%, Trailing: 0.2%
             </p>
         </footer>
     </div>

@@ -4,6 +4,7 @@ import com.turkninja.config.Config;
 import com.turkninja.engine.IndicatorService;
 import com.turkninja.engine.PositionTracker;
 import com.turkninja.engine.RiskManager;
+import com.turkninja.engine.OrderBookService;
 import com.turkninja.engine.StrategyEngine;
 import com.turkninja.infra.*;
 import com.turkninja.infra.repository.AccountRepository;
@@ -55,16 +56,13 @@ public class App {
     }
 
     @Bean
-    public RiskManager riskManager(FuturesBinanceService futuresBinanceService) {
+    public RiskManager riskManager(FuturesBinanceService futuresBinanceService,
+            FuturesWebSocketService webSocketService) {
         // RiskManager needs PositionTracker, but PositionTracker needs RiskManager.
         // We initialize with null PositionTracker first, then set it later.
-        // Or better, we can rely on Spring's singleton nature and set it in the
-        // PositionTracker bean or a separate config.
-        // Here we follow the original pattern: create with null, then set.
-        // But since beans are immutable-ish in definition, we need a way to link them.
-        // PositionTracker constructor takes RiskManager.
-        // RiskManager has setPositionTracker.
-        return new RiskManager(null, futuresBinanceService);
+        RiskManager riskManager = new RiskManager(null, futuresBinanceService);
+        riskManager.setWebSocketService(webSocketService);
+        return riskManager;
     }
 
     @Bean
@@ -81,13 +79,19 @@ public class App {
     }
 
     @Bean
+    public OrderBookService orderBookService() {
+        return new OrderBookService();
+    }
+
+    @Bean
     public StrategyEngine strategyEngine(FuturesBinanceService futuresBinanceService,
             FuturesWebSocketService webSocketService,
             IndicatorService indicatorService,
             RiskManager riskManager,
-            PositionTracker positionTracker) {
+            PositionTracker positionTracker,
+            OrderBookService orderBookService) {
         return new StrategyEngine(futuresBinanceService, webSocketService,
-                indicatorService, riskManager, positionTracker);
+                indicatorService, riskManager, positionTracker, orderBookService);
     }
 
     @Bean
