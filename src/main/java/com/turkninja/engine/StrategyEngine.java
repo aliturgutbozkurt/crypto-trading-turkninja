@@ -438,7 +438,24 @@ public class StrategyEngine {
                 return;
             }
 
-            // 3. Check Order Book slippage
+            // 3. Check Available Balance & Dynamic Sizing
+            double availableBalance = futuresService.getAvailableBalance();
+            if (availableBalance < 10.0) {
+                logger.warn("⚠️ Insufficient balance (${}) to open position for {}",
+                        String.format("%.2f", availableBalance), symbol);
+                pushSignal(symbol, side, "Blocked: Low Balance (<$10)", price, false, "BLOCKED_BALANCE");
+                return;
+            }
+
+            // If configured size > 95% of balance, reduce size
+            if (positionSize > availableBalance * 0.95) {
+                double newSize = availableBalance * 0.95;
+                logger.info("⚠️ Adjusting position size for {}: ${} -> ${} (Balance: ${})",
+                        symbol, positionSize, String.format("%.2f", newSize), String.format("%.2f", availableBalance));
+                positionSize = newSize;
+            }
+
+            // 4. Check Order Book slippage
             if (!orderBookService.isSlippageAcceptable(symbol, side, positionSize, price)) {
                 logger.warn("⚠️ {} Order Book slippage too high - trade blocked", symbol);
                 pushSignal(symbol, side, "Blocked: High Slippage (>0.5%)", price, false, "BLOCKED_SLIPPAGE");
