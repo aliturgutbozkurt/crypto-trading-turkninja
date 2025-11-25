@@ -86,6 +86,24 @@ public class IndicatorService {
             results.put("ATR_PERCENT", currentPrice > 0 ? (atr / currentPrice) * 100 : 0.0);
         }
 
+        // Nadaraya-Watson Envelope
+        if (series.getBarCount() >= 100) {
+            java.util.List<Double> closePrices = new java.util.ArrayList<>();
+            for (int i = 0; i <= series.getEndIndex(); i++) {
+                closePrices.add(series.getBar(i).getClosePrice().doubleValue());
+            }
+
+            // Read NWE parameters from config
+            int nweLookback = Integer.parseInt(com.turkninja.config.Config.get("strategy.nwe.lookback", "200"));
+            double nweBandwidth = Double.parseDouble(com.turkninja.config.Config.get("strategy.nwe.bandwidth", "8"));
+            double nweMultiplier = Double
+                    .parseDouble(com.turkninja.config.Config.get("strategy.nwe.multiplier", "2.5"));
+
+            Map<String, Double> nwe = NadarayaWatsonCalculator.calculateNWE(closePrices, nweLookback, nweBandwidth,
+                    nweMultiplier);
+            results.putAll(nwe);
+        }
+
         return results;
     }
 

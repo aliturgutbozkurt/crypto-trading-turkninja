@@ -73,8 +73,13 @@ public class StrategyEngine {
         emaBufferPercent = Double.parseDouble(Config.get("strategy.ema.buffer.percent", "0.007"));
         useMultiTimeframe = Boolean.parseBoolean(Config.get("strategy.use.multitimeframe", "true"));
 
-        logger.info("Strategy Config Loaded: RSI [{}-{}] / [{}-{}], EMA Buffer: {}%, Multi-TF: {}",
-                rsiLongMin, rsiLongMax, rsiShortMin, rsiShortMax, emaBufferPercent * 100, useMultiTimeframe);
+        // Load NWE config
+        nweEnabled = Boolean.parseBoolean(Config.get("strategy.nwe.enabled", "true"));
+        nweMinBandwidthPercent = Double.parseDouble(Config.get("strategy.nwe.min_bandwidth_percent", "0.01"));
+
+        logger.info("Strategy Config Loaded: RSI [{}-{}] / [{}-{}], EMA Buffer: {}%, Multi-TF: {}, NWE: {}",
+                rsiLongMin, rsiLongMax, rsiShortMin, rsiShortMax, emaBufferPercent * 100, useMultiTimeframe,
+                nweEnabled);
 
         // Batch signal selection config
         this.batchModeEnabled = Boolean.parseBoolean(Config.get("strategy.batch.enabled", "true"));
@@ -90,6 +95,10 @@ public class StrategyEngine {
     private double macdSignalTolerance;
     private double emaBufferPercent;
     private boolean useMultiTimeframe;
+
+    // Nadaraya-Watson Envelope parameters
+    private boolean nweEnabled;
+    private double nweMinBandwidthPercent;
 
     private volatile String btcTrend = "NEUTRAL"; // BULLISH, BEARISH, NEUTRAL
 
@@ -328,6 +337,30 @@ public class StrategyEngine {
             }
 
             if (isBuySignal) {
+                // NWE Filter (if enabled)
+                if (nweEnabled && indicators15m.containsKey("NWE_BANDWIDTH_PERCENT")) {
+                    double nweUpper = indicators15m.getOrDefault("NWE_UPPER", 0.0);
+                    double nweLower = indicators15m.getOrDefault("NWE_LOWER", 0.0);
+                    double nweBandwidth = indicators15m.get("NWE_BANDWIDTH_PERCENT");
+
+                    // Skip if market is too choppy (narrow bands)
+                    if (nweBandwidth < nweMinBandwidthPercent) {
+                        logger.info("⏸️ {} LONG filtered - NWE bands too narrow ({}% < {}%)",
+                                symbol, String.format("%.2f", nweBandwidth * 100),
+                                String.format("%.2f", nweMinBandwidthPercent * 100));
+                        return;
+                    }
+
+                    // Prefer entries near lower band for LONG (better risk/reward)
+                    double distanceToLower = Math.abs(currentPrice - nweLower) / nweLower;
+                    if (currentPrice < nweLower || distanceToLower < 0.005) {
+                        logger.info("✅ {} LONG NWE confirmed - price near/below lower band", symbol);
+                    } else if (currentPrice > nweUpper) {
+                        logger.info("⏸️ {} LONG filtered - price already above NWE upper band", symbol);
+                        return;
+                    }
+                }
+
                 // BTC Trend Check: Don't LONG if BTC is bearish
                 if (btcTrend.equals("BEARISH")) {
                     logger.info("⏸️ {} LONG filtered - BTC trend bearish", symbol);
@@ -392,6 +425,30 @@ public class StrategyEngine {
             }
 
             if (isSellSignal) {
+                // NWE Filter (if enabled)
+                if (nweEnabled && indicators15m.containsKey("NWE_BANDWIDTH_PERCENT")) {
+                    double nweUpper = indicators15m.getOrDefault("NWE_UPPER", 0.0);
+                    double nweLower = indicators15m.getOrDefault("NWE_LOWER", 0.0);
+                    double nweBandwidth = indicators15m.get("NWE_BANDWIDTH_PERCENT");
+
+                    // Skip if market is too choppy (narrow bands)
+                    if (nweBandwidth < nweMinBandwidthPercent) {
+                        logger.info("⏸️ {} SHORT filtered - NWE bands too narrow ({}% < {}%)",
+                                symbol, String.format("%.2f", nweBandwidth * 100),
+                                String.format("%.2f", nweMinBandwidthPercent * 100));
+                        return;
+                    }
+
+                    // Prefer entries near upper band for SHORT (better risk/reward)
+                    double distanceToUpper = Math.abs(currentPrice - nweUpper) / nweUpper;
+                    if (currentPrice > nweUpper || distanceToUpper < 0.005) {
+                        logger.info("✅ {} SHORT NWE confirmed - price near/above upper band", symbol);
+                    } else if (currentPrice < nweLower) {
+                        logger.info("⏸️ {} SHORT filtered - price already below NWE lower band", symbol);
+                        return;
+                    }
+                }
+
                 // BTC Trend Check: Don't SHORT if BTC is bullish
                 if (btcTrend.equals("BULLISH")) {
                     logger.info("⏸️ {} SHORT filtered - BTC trend bullish", symbol);
