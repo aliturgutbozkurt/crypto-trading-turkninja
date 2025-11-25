@@ -117,8 +117,8 @@ public class StrategyEngine {
                 String symbol = kline.getString("s");
                 String interval = kline.getString("i");
 
-                // We only care about 5m candles (as configured in WebSocketService)
-                if (!"5m".equals(interval))
+                // We only care about 15m candles (as configured in WebSocketService)
+                if (!"15m".equals(interval))
                     return;
 
                 // 1. Analyze BTC Trend first if it's BTC
@@ -142,7 +142,7 @@ public class StrategyEngine {
             }
         });
 
-        logger.info("Automated trading started (Event-Driven: 5m Candle Close)");
+        logger.info("Automated trading started (Event-Driven: 15m Candle Close)");
         logger.info("Monitoring symbols: {}", tradingSymbols);
 
         // Start batch processor if enabled
@@ -194,7 +194,7 @@ public class StrategyEngine {
         try {
             String symbol = "BTCUSDT";
             // Get klines from WebSocket cache (NO REST API CALL)
-            List<JSONObject> klines = webSocketService.getCachedKlines(symbol, "5m", 100);
+            List<JSONObject> klines = webSocketService.getCachedKlines(symbol, "15m", 100);
             if (klines.isEmpty()) {
                 logger.warn("No cached klines for {}, skipping analysis", symbol);
                 return;
@@ -253,33 +253,33 @@ public class StrategyEngine {
                 symbolCooldown.remove(symbol);
             }
 
-            // 3. Fetch Data (5m only)
-            List<JSONObject> klines5m = webSocketService.getCachedKlines(symbol, "5m", 100);
+            // 3. Fetch Data (15m only)
+            List<JSONObject> klines15m = webSocketService.getCachedKlines(symbol, "15m", 100);
 
-            if (klines5m.isEmpty()) {
-                logger.warn("Insufficient cached klines for {} (5m: {}), skipping",
-                        symbol, klines5m.size());
+            if (klines15m.isEmpty()) {
+                logger.warn("Insufficient cached klines for {} (15m: {}), skipping",
+                        symbol, klines15m.size());
                 return;
             }
 
-            BarSeries series5m = convertCachedKlinesToBarSeries(symbol, klines5m);
+            BarSeries series15m = convertCachedKlinesToBarSeries(symbol, klines15m);
 
-            // 4. Calculate Indicators
-            Map<String, Double> indicators5m = indicatorService.calculateIndicators(series5m);
+            // Calculate indicators from cached klines
+            Map<String, Double> indicators15m = indicatorService.calculateIndicators(series15m);
 
-            // 5. Get Values
-            double currentPrice = series5m.getLastBar().getClosePrice().doubleValue();
+            // Current Price
+            double currentPrice = series15m.getLastBar().getClosePrice().doubleValue();
 
-            // 5m Trend Indicators
-            double ema50_5m = indicators5m.getOrDefault("EMA_50", currentPrice);
-            double rsi_5m = indicators5m.getOrDefault("RSI", 50.0);
-            double macd = indicators5m.getOrDefault("MACD", 0.0);
-            double macdSignal = indicators5m.getOrDefault("MACD_SIGNAL", 0.0);
+            // 15m Trend Indicators
+            double ema50_15m = indicators15m.getOrDefault("EMA_50", currentPrice);
+            double rsi_15m = indicators15m.getOrDefault("RSI", 50.0);
+            double macd = indicators15m.getOrDefault("MACD", 0.0);
+            double macdSignal = indicators15m.getOrDefault("MACD_SIGNAL", 0.0);
 
-            logger.info("{} | Price={} | 5m[RSI={:.1f}, EMA50={:.2f}, MACD={:.4f}/{:.4f}]",
-                    symbol, currentPrice, rsi_5m, ema50_5m, macd, macdSignal);
+            logger.info("{} | Price={} | 15m[RSI={:.1f}, EMA50={:.2f}, MACD={:.4f}/{:.4f}]",
+                    symbol, currentPrice, rsi_15m, ema50_15m, macd, macdSignal);
 
-            // --- 5-MINUTE STRATEGY (Trend + Momentum) ---
+            // --- 15-MINUTE STRATEGY (Trend + Momentum) ---
 
             // LONG Logic:
             // 1. Trend: Price > EMA 50
@@ -290,15 +290,15 @@ public class StrategyEngine {
             String buyReason = "";
 
             // EMA buffer: +0.3% to avoid sideways false signals
-            boolean trendUp = currentPrice > ema50_5m * 1.003;
-            boolean momentumUp = rsi_5m > rsiLongMin && rsi_5m < rsiLongMax;
+            boolean trendUp = currentPrice > ema50_15m * 1.003;
+            boolean momentumUp = rsi_15m > rsiLongMin && rsi_15m < rsiLongMax;
             boolean macdBullish = macd > (macdSignal + macdSignalTolerance);
 
             // Debug: Log signal conditions every 10 candles
             if (Math.random() < 0.1) {
                 logger.info(
                         "🔍 {} Check: Price={}, EMA50={}, RSI={}, MACD={}/{}, TrendUp={}, MomentumUp={}, MACDBullish={}",
-                        symbol, currentPrice, ema50_5m, rsi_5m, macd, macdSignal, trendUp, momentumUp, macdBullish);
+                        symbol, currentPrice, ema50_15m, rsi_15m, macd, macdSignal, trendUp, momentumUp, macdBullish);
             }
 
             // Changed to OR logic: At least 2 out of 3 conditions must be met
@@ -316,7 +316,7 @@ public class StrategyEngine {
                         macdBullish);
                 buyReason = String.format(
                         "LONG: %d/3 conditions met (%s) RSI=%.0f",
-                        conditionsMet, conditions, rsi_5m);
+                        conditionsMet, conditions, rsi_15m);
                 logger.info("🟢 {} LONG Signal: {}", symbol, buyReason);
             }
 
@@ -336,7 +336,7 @@ public class StrategyEngine {
                 // Batch mode: Calculate score and add to batch
                 if (batchModeEnabled) {
                     SignalScore score = calculateSignalScore(symbol, "BUY", currentPrice,
-                            rsi_5m, macd, macdSignal, ema50_5m, 0);
+                            rsi_15m, macd, macdSignal, ema50_15m, 0);
                     signalBatch.addSignal(score);
                     logger.info("📊 Signal added to batch: {} BUY @ {} | Score: {}", symbol, currentPrice,
                             score.totalScore);
@@ -361,8 +361,8 @@ public class StrategyEngine {
             String sellReason = "";
 
             // EMA buffer: -0.3% to avoid sideways false signals
-            boolean trendDown = currentPrice < ema50_5m * 0.997;
-            boolean momentumDown = rsi_5m < rsiShortMax && rsi_5m > rsiShortMin;
+            boolean trendDown = currentPrice < ema50_15m * 0.997;
+            boolean momentumDown = rsi_15m < rsiShortMax && rsi_15m > rsiShortMin;
             boolean macdBearish = macd < (macdSignal - macdSignalTolerance);
 
             // Changed to OR logic: At least 2 out of 3 conditions must be met
@@ -380,7 +380,7 @@ public class StrategyEngine {
                         momentumDown, macdBearish);
                 sellReason = String.format(
                         "SHORT: %d/3 conditions met (%s) RSI=%.0f",
-                        conditionsMetShort, conditions, rsi_5m);
+                        conditionsMetShort, conditions, rsi_15m);
                 logger.info("🔴 {} SHORT Signal: {}", symbol, sellReason);
             }
 
@@ -400,7 +400,7 @@ public class StrategyEngine {
                 // Batch mode: Calculate score and add to batch
                 if (batchModeEnabled) {
                     SignalScore score = calculateSignalScore(symbol, "SELL", currentPrice,
-                            rsi_5m, macd, macdSignal, ema50_5m, 0);
+                            rsi_15m, macd, macdSignal, ema50_15m, 0);
                     signalBatch.addSignal(score);
                     return; // Don't execute immediately
                 }
@@ -566,7 +566,7 @@ public class StrategyEngine {
     public void analyze(String symbol) {
         try {
             // 1. Fetch Data from WebSocket cache (NO REST API CALL)
-            List<JSONObject> klines = webSocketService.getCachedKlines(symbol, "5m", 100);
+            List<JSONObject> klines = webSocketService.getCachedKlines(symbol, "15m", 100);
             if (klines.isEmpty()) {
                 logger.warn("No cached klines for {}, skipping analysis", symbol);
                 return;
