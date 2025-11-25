@@ -57,12 +57,11 @@ public class App {
 
     @Bean
     public RiskManager riskManager(FuturesBinanceService futuresBinanceService,
-            FuturesWebSocketService webSocketService) {
-        // RiskManager needs PositionTracker, but PositionTracker needs RiskManager.
-        // We initialize with null PositionTracker first, then set it later.
-        RiskManager riskManager = new RiskManager(null, futuresBinanceService);
-        riskManager.setWebSocketService(webSocketService);
-        return riskManager;
+            FuturesWebSocketService webSocketService,
+            OrderBookService orderBookService) {
+        RiskManager manager = new RiskManager(null, futuresBinanceService, orderBookService);
+        manager.setWebSocketService(webSocketService);
+        return manager;
     }
 
     @Bean

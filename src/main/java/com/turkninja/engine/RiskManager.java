@@ -29,6 +29,7 @@ public class RiskManager {
     private PositionTracker positionTracker;
     private final FuturesBinanceService futuresService;
     private FuturesWebSocketService webSocketService; // For cached mark prices
+    private final OrderBookService orderBookService; // For liquidity and wall detection
     private final ScheduledExecutorService monitoringExecutor;
     private volatile boolean monitoringActive = false;
 
@@ -48,9 +49,17 @@ public class RiskManager {
     private final double COMMISSION_RATE_ROUND_TRIP = 0.001; // 0.1% (0.05% Entry + 0.05% Exit)
     private final double TRAILING_ACTIVATION_THRESHOLD;
 
-    public RiskManager(PositionTracker positionTracker, FuturesBinanceService futuresService) {
+    // Order Book Aware Stop Settings
+    private final boolean ORDER_BOOK_AWARE_ENABLED;
+    private final double MAX_SLIPPAGE_PERCENT = 0.01; // 1% max slippage
+    private final double EARLY_EXIT_SLIPPAGE_PERCENT = 0.008; // Exit early if slippage > 0.8%
+    private final double WALL_PROXIMITY_PERCENT = 0.002; // 0.2% proximity to walls
+
+    public RiskManager(PositionTracker positionTracker, FuturesBinanceService futuresService,
+            OrderBookService orderBookService) {
         this.positionTracker = positionTracker;
         this.futuresService = futuresService;
+        this.orderBookService = orderBookService;
         this.maxConcurrentPositions = Config.getInt("risk.max_concurrent_positions", 1000);
         this.maxPositionSizeUsdt = Config.getDouble("risk.max_position_size", 1000.0);
         this.dailyLossLimit = Config.getDouble("risk.daily_loss_limit", 500.0);
@@ -58,9 +67,13 @@ public class RiskManager {
 
         // Load trailing activation threshold from config (default 0.3%)
         this.TRAILING_ACTIVATION_THRESHOLD = Config.getDouble("strategy.trailing.activation.threshold", 0.003);
+
+        // Load order book aware settings
+        this.ORDER_BOOK_AWARE_ENABLED = Boolean.parseBoolean(Config.get("risk.orderbook.enabled", "true"));
+
         logger.info(
-                "RiskManager initialized with SL/TP automation (Max Position: ${}, Max Concurrent: {}, Daily Loss Limit: ${})",
-                maxPositionSizeUsdt, maxConcurrentPositions, dailyLossLimit);
+                "RiskManager initialized with SL/TP automation (Max Position: ${}, Max Concurrent: {}, Daily Loss Limit: ${}, OrderBook Aware: {})",
+                maxPositionSizeUsdt, maxConcurrentPositions, dailyLossLimit, ORDER_BOOK_AWARE_ENABLED);
     }
 
     public void setPositionTracker(PositionTracker positionTracker) {
@@ -114,14 +127,19 @@ public class RiskManager {
             // Calculate Stop Price: High * (1 - trailingPct)
             BigDecimal stopPrice = extremePrice.multiply(BigDecimal.ONE.subtract(trailingPct));
 
-            if (currentPrice.compareTo(stopPrice) <= 0) {
+            // Use smart stop check with order book intelligence
+            double positionSizeUsdt = getPositionSizeUsdt(symbol);
+            boolean shouldExit = shouldExitWithOrderBookCheck(
+                    symbol, currentPrice, true, stopPrice, positionSizeUsdt);
+
+            if (shouldExit) {
                 BigDecimal grossProfit = extremePrice.subtract(entryPrice)
                         .divide(entryPrice, 4, RoundingMode.HALF_UP)
                         .multiply(BigDecimal.valueOf(100));
                 BigDecimal netProfit = grossProfit.subtract(BigDecimal.valueOf(COMMISSION_RATE_ROUND_TRIP * 100));
 
                 logger.warn(
-                        "🎯 Trailing Stop Triggered for {} (LONG)! Peak: {}, Net Profit Locked: {}%, Current: {}, Stop: {}",
+                        "🎯 Trailing Stop Triggered for {} (LONG)! Highest: {}, Net Profit Locked: {}%, Current: {}, Stop: {}",
                         symbol, extremePrice, netProfit, currentPrice, stopPrice);
                 return true; // EXIT NOW
             }
@@ -163,7 +181,12 @@ public class RiskManager {
                         symbol, currentPrice, extremePrice, stopPrice, isActivated);
             }
 
-            if (currentPrice.compareTo(stopPrice) >= 0) {
+            // Use smart stop check with order book intelligence
+            double positionSizeUsdt = getPositionSizeUsdt(symbol);
+            boolean shouldExit = shouldExitWithOrderBookCheck(
+                    symbol, currentPrice, false, stopPrice, positionSizeUsdt);
+
+            if (shouldExit) {
                 BigDecimal grossProfit = entryPrice.subtract(extremePrice)
                         .divide(entryPrice, 4, RoundingMode.HALF_UP)
                         .multiply(BigDecimal.valueOf(100));
@@ -183,6 +206,88 @@ public class RiskManager {
         entryPrices.remove(symbol);
         extremePrices.remove(symbol);
         trailingStopPercentages.remove(symbol);
+    }
+
+    /**
+     * Check if stop should be triggered with order book intelligence
+     * Returns true if position should exit, considering:
+     * 1. Normal stop/trailing stop logic
+     * 2. Liquidity at stop level (slippage protection)
+     * 3. Buy/sell walls (better execution)
+     */
+    private boolean shouldExitWithOrderBookCheck(String symbol, BigDecimal currentPrice,
+            boolean isLong, BigDecimal stopPrice,
+            double positionSizeUsdt) {
+        // 1. Calculate normal stop condition
+        boolean normalStopHit = isLong ? currentPrice.compareTo(stopPrice) <= 0
+                : currentPrice.compareTo(stopPrice) >= 0;
+
+        // 2. If order book disabled or unavailable, use normal logic only
+        if (!ORDER_BOOK_AWARE_ENABLED || orderBookService == null || !orderBookService.isEnabled()) {
+            return normalStopHit;
+        }
+
+        double currentPriceD = currentPrice.doubleValue();
+
+        // 3. Estimate slippage at current price (exit execution)
+        String exitSide = isLong ? "SELL" : "BUY";
+        double estimatedSlippage = orderBookService.estimateSlippage(
+                symbol, exitSide, positionSizeUsdt, currentPriceD);
+
+        // 4. Check if slippage is dangerously high - EXIT EARLY!
+        if (estimatedSlippage > EARLY_EXIT_SLIPPAGE_PERCENT) {
+            logger.warn("⚠️ {} High slippage detected ({:.2f}%) - EXITING EARLY to protect from losses",
+                    symbol, estimatedSlippage * 100);
+            return true; // Exit now, before hitting actual stop
+        }
+
+        // 5. Check for walls that might prevent good execution
+        if (!isLong) { // SHORT position - check buy walls
+            java.util.Optional<Double> buyWall = orderBookService.detectBuyWall(symbol);
+            if (buyWall.isPresent()) {
+                double wallPrice = buyWall.get();
+
+                // If approaching buy wall from below, exit before hitting it
+                double distanceToWall = (wallPrice - currentPriceD) / currentPriceD;
+                if (currentPriceD < wallPrice && distanceToWall < WALL_PROXIMITY_PERCENT) {
+                    logger.info("📊 {} Buy wall at ${:.4f}, current ${:.4f} - exiting before wall",
+                            symbol, wallPrice, currentPriceD);
+                    return true;
+                }
+            }
+        } else { // LONG position - check sell walls
+            java.util.Optional<Double> sellWall = orderBookService.detectSellWall(symbol);
+            if (sellWall.isPresent()) {
+                double wallPrice = sellWall.get();
+
+                // If approaching sell wall from above, exit before hitting it
+                double distanceToWall = (currentPriceD - wallPrice) / currentPriceD;
+                if (currentPriceD > wallPrice && distanceToWall < WALL_PROXIMITY_PERCENT) {
+                    logger.info("📊 {} Sell wall at ${:.4f}, current ${:.4f} - exiting before wall",
+                            symbol, wallPrice, currentPriceD);
+                    return true;
+                }
+            }
+        }
+
+        // 6. Final check against normal stop price
+        return normalStopHit;
+    }
+
+    /**
+     * Helper method to get position size in USDT for slippage estimation
+     */
+    private double getPositionSizeUsdt(String symbol) {
+        if (positionTracker == null) {
+            return 100.0; // Default fallback
+        }
+
+        PositionTracker.Position position = positionTracker.getPosition(symbol);
+        if (position == null) {
+            return 100.0; // Default fallback
+        }
+
+        return Math.abs(position.quantity * position.entryPrice);
     }
 
     /**
