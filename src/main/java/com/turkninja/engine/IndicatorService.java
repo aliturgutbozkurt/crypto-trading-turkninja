@@ -14,7 +14,9 @@ import org.ta4j.core.num.Num;
 
 import java.time.Duration;
 import java.time.ZonedDateTime;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 public class IndicatorService {
@@ -28,7 +30,42 @@ public class IndicatorService {
 
         // RSI
         RSIIndicator rsi = new RSIIndicator(closePrice, 14);
-        results.put("RSI", rsi.getValue(series.getEndIndex()).doubleValue());
+        double currentRSI = rsi.getValue(series.getEndIndex()).doubleValue();
+        results.put("RSI", currentRSI);
+
+        // RSI Bands (Bollinger Bands applied to RSI values)
+        if (series.getBarCount() >= 20) {
+            List<Double> rsiHistory = new ArrayList<>();
+            int startIndex = Math.max(0, series.getEndIndex() - 19);
+
+            for (int i = startIndex; i <= series.getEndIndex(); i++) {
+                rsiHistory.add(rsi.getValue(i).doubleValue());
+            }
+
+            // Calculate RSI standard deviation
+            double rsiMean = rsiHistory.stream().mapToDouble(Double::doubleValue).average().orElse(50.0);
+            double rsiVariance = rsiHistory.stream()
+                    .mapToDouble(val -> Math.pow(val - rsiMean, 2))
+                    .average()
+                    .orElse(0.0);
+            double rsiStdDev = Math.sqrt(rsiVariance);
+
+            // RSI Bands with 2x standard deviation multiplier
+            double rsiBandsMultiplier = Double.parseDouble(
+                    com.turkninja.config.Config.get("strategy.rsi.bands.multiplier", "2.0"));
+
+            double rsiUpperBand = currentRSI + (rsiStdDev * rsiBandsMultiplier);
+            double rsiLowerBand = currentRSI - (rsiStdDev * rsiBandsMultiplier);
+            double rsiBandwidth = rsiUpperBand - rsiLowerBand;
+
+            // Clamp bands to RSI range [0, 100]
+            rsiUpperBand = Math.min(100, rsiUpperBand);
+            rsiLowerBand = Math.max(0, rsiLowerBand);
+
+            results.put("RSI_UPPER_BAND", rsiUpperBand);
+            results.put("RSI_LOWER_BAND", rsiLowerBand);
+            results.put("RSI_BANDWIDTH", rsiBandwidth);
+        }
 
         // MACD
         MACDIndicator macd = new MACDIndicator(closePrice, 12, 26);

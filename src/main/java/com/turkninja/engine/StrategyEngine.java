@@ -77,9 +77,14 @@ public class StrategyEngine {
         nweEnabled = Boolean.parseBoolean(Config.get("strategy.nwe.enabled", "true"));
         nweMinBandwidthPercent = Double.parseDouble(Config.get("strategy.nwe.min_bandwidth_percent", "0.01"));
 
-        logger.info("Strategy Config Loaded: RSI [{}-{}] / [{}-{}], EMA Buffer: {}%, Multi-TF: {}, NWE: {}",
+        // Load RSI Bands config
+        rsiBandsEnabled = Boolean.parseBoolean(Config.get("strategy.rsi.bands.enabled", "true"));
+        rsiBandsMinWidth = Double.parseDouble(Config.get("strategy.rsi.bands.min_width", "10.0"));
+
+        logger.info(
+                "Strategy Config Loaded: RSI [{}-{}] / [{}-{}], EMA Buffer: {}%, Multi-TF: {}, NWE: {}, RSI Bands: {}",
                 rsiLongMin, rsiLongMax, rsiShortMin, rsiShortMax, emaBufferPercent * 100, useMultiTimeframe,
-                nweEnabled);
+                nweEnabled, rsiBandsEnabled);
 
         // Batch signal selection config
         this.batchModeEnabled = Boolean.parseBoolean(Config.get("strategy.batch.enabled", "true"));
@@ -99,6 +104,10 @@ public class StrategyEngine {
     // Nadaraya-Watson Envelope parameters
     private boolean nweEnabled;
     private double nweMinBandwidthPercent;
+
+    // RSI Bands parameters
+    private boolean rsiBandsEnabled;
+    private double rsiBandsMinWidth;
 
     private volatile String btcTrend = "NEUTRAL"; // BULLISH, BEARISH, NEUTRAL
 
@@ -359,6 +368,34 @@ public class StrategyEngine {
                         logger.info("⏸️ {} LONG filtered - price already above NWE upper band", symbol);
                         return;
                     }
+                }
+
+                // RSI Bands Filter (if enabled)
+                if (rsiBandsEnabled && indicators15m.containsKey("RSI_BANDWIDTH")) {
+                    double rsiLowerBand = indicators15m.getOrDefault("RSI_LOWER_BAND", 0.0);
+                    double rsiUpperBand = indicators15m.getOrDefault("RSI_UPPER_BAND", 100.0);
+                    double rsiBandwidth = indicators15m.getOrDefault("RSI_BANDWIDTH", 0.0);
+
+                    // 1. Squeeze Filter: Skip if bands are too narrow (low volatility)
+                    if (rsiBandwidth < rsiBandsMinWidth) {
+                        logger.info("⏸️ {} LONG filtered - RSI Bands squeeze (Width: {:.2f} < {:.2f})",
+                                symbol, rsiBandwidth, rsiBandsMinWidth);
+                        return;
+                    }
+
+                    // 2. Dynamic Oversold Check: RSI should be near lower band
+                    // Allow entry if RSI is below lower band OR within 10% of it
+                    double threshold = rsiLowerBand + (rsiBandwidth * 0.2); // Lower 20% of the band
+
+                    if (rsi_15m > threshold) {
+                        logger.info(
+                                "⏸️ {} LONG filtered - RSI ({:.2f}) too high relative to dynamic lower band ({:.2f})",
+                                symbol, rsi_15m, rsiLowerBand);
+                        return;
+                    }
+
+                    logger.info("✅ {} LONG RSI Bands confirmed - RSI ({:.2f}) in buy zone (Lower Band: {:.2f})",
+                            symbol, rsi_15m, rsiLowerBand);
                 }
 
                 // BTC Trend Check: Don't LONG if BTC is bearish
