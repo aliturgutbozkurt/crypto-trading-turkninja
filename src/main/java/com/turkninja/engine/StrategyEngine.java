@@ -2,6 +2,7 @@ package com.turkninja.engine;
 
 import com.turkninja.infra.FuturesBinanceService;
 import com.turkninja.infra.FuturesWebSocketService;
+import com.turkninja.infra.TelegramNotifier;
 import com.turkninja.web.service.WebSocketPushService;
 import com.turkninja.web.dto.SignalDTO;
 import com.turkninja.config.Config;
@@ -29,6 +30,8 @@ public class StrategyEngine {
     private final RiskManager riskManager;
     private final PositionTracker positionTracker;
     private final OrderBookService orderBookService;
+    private final MultiTimeframeAnalyzer multiTfAnalyzer;
+    private final TelegramNotifier telegram;
     private WebSocketPushService webSocketPushService; // Optional, for UI notifications
 
     private List<String> tradingSymbols = Arrays.asList(
@@ -45,19 +48,22 @@ public class StrategyEngine {
 
     public StrategyEngine(FuturesBinanceService futuresService, FuturesWebSocketService webSocketService,
             IndicatorService indicatorService, RiskManager riskManager, PositionTracker positionTracker,
-            OrderBookService orderBookService) {
+            OrderBookService orderBookService, MultiTimeframeAnalyzer multiTfAnalyzer, TelegramNotifier telegram) {
         this.futuresService = futuresService;
         this.webSocketService = webSocketService;
         this.indicatorService = indicatorService;
         this.riskManager = riskManager;
         this.positionTracker = positionTracker;
         this.orderBookService = orderBookService;
+        this.multiTfAnalyzer = multiTfAnalyzer;
+        this.telegram = telegram;
         // Load configurable entry filter parameters
         this.rsiLongMin = Config.getDouble("strategy.rsi.long.min", 40.0);
         this.rsiLongMax = Config.getDouble("strategy.rsi.long.max", 80.0);
         this.rsiShortMin = Config.getDouble("strategy.rsi.short.min", 20.0);
         this.rsiShortMax = Config.getDouble("strategy.rsi.short.max", 60.0);
         this.macdSignalTolerance = Config.getDouble("strategy.macd.signal.tolerance", 0.0005);
+        this.useMultiTimeframe = Boolean.parseBoolean(Config.get("strategy.use.multi.timeframe", "true"));
     }
 
     // Configurable entry filter parameters
@@ -66,6 +72,7 @@ public class StrategyEngine {
     private double rsiShortMin;
     private double rsiShortMax;
     private double macdSignalTolerance;
+    private boolean useMultiTimeframe;
 
     private volatile String btcTrend = "NEUTRAL"; // BULLISH, BEARISH, NEUTRAL
 
@@ -247,6 +254,12 @@ public class StrategyEngine {
             }
 
             if (isBuySignal) {
+                // Multi-Timeframe Confirmation: Check 1H trend
+                if (useMultiTimeframe && !multiTfAnalyzer.isSignalConfirmed(symbol, "BUY")) {
+                    logger.info("⏸️ {} LONG signal filtered - 1H trend not bullish", symbol);
+                    return; // Skip this trade
+                }
+
                 String msg = String.format("🟢 BUY SIGNAL for %s: %s (Price=%.2f)", symbol, buyReason, currentPrice);
                 logger.info(msg);
                 System.out.println(msg);
@@ -276,6 +289,12 @@ public class StrategyEngine {
             }
 
             if (isSellSignal) {
+                // Multi-Timeframe Confirmation: Check 1H trend
+                if (useMultiTimeframe && !multiTfAnalyzer.isSignalConfirmed(symbol, "SELL")) {
+                    logger.info("⏸️ {} SHORT signal filtered - 1H trend not bearish", symbol);
+                    return; // Skip this trade
+                }
+
                 String msg = String.format("🔴 SELL SIGNAL for %s: %s (Price=%.2f)", symbol, sellReason, currentPrice);
                 logger.info(msg);
                 System.out.println(msg);
@@ -335,10 +354,15 @@ public class StrategyEngine {
             // 7. Track Position
             positionTracker.trackPosition(symbol, side, price, quantity);
 
-            // 8. Update Signal Status to EXECUTED
+            // 8. Send Telegram Notification
+            if (telegram != null && telegram.isEnabled()) {
+                telegram.notifyPositionOpened(symbol, side, price, quantity, positionSize);
+            }
+
+            // 9. Update Signal Status to EXECUTED
             pushSignal(symbol, side, "Trade Executed Successfully", price, true, "EXECUTED");
 
-            // 9. Alert: Sound + Red console output
+            // 10. Alert: Sound + Red console output
             System.out.print("\007"); // System beep
             String redColor = "\u001B[31m";
             String resetColor = "\u001B[0m";

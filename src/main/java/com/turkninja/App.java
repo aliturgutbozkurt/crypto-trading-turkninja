@@ -1,17 +1,15 @@
 package com.turkninja;
 
 import com.turkninja.config.Config;
-import com.turkninja.engine.IndicatorService;
-import com.turkninja.engine.PositionTracker;
-import com.turkninja.engine.RiskManager;
-import com.turkninja.engine.OrderBookService;
-import com.turkninja.engine.StrategyEngine;
+import com.turkninja.engine.*;
 import com.turkninja.infra.*;
 import com.turkninja.infra.repository.AccountRepository;
 import com.turkninja.infra.repository.TradeRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.context.annotation.Bean;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.Bean;
 
@@ -56,6 +54,11 @@ public class App {
     }
 
     @Bean
+    public TelegramNotifier telegramNotifier() {
+        return new TelegramNotifier();
+    }
+
+    @Bean
     public RiskManager riskManager(FuturesBinanceService futuresBinanceService,
             FuturesWebSocketService webSocketService,
             OrderBookService orderBookService) {
@@ -78,19 +81,22 @@ public class App {
     }
 
     @Bean
+    public MultiTimeframeAnalyzer multiTimeframeAnalyzer(FuturesBinanceService futuresBinanceService) {
+        return new MultiTimeframeAnalyzer(futuresBinanceService);
+    }
+
+    @Bean
     public OrderBookService orderBookService() {
         return new OrderBookService();
     }
 
     @Bean
     public StrategyEngine strategyEngine(FuturesBinanceService futuresBinanceService,
-            FuturesWebSocketService webSocketService,
-            IndicatorService indicatorService,
-            RiskManager riskManager,
-            PositionTracker positionTracker,
-            OrderBookService orderBookService) {
-        return new StrategyEngine(futuresBinanceService, webSocketService,
-                indicatorService, riskManager, positionTracker, orderBookService);
+            FuturesWebSocketService webSocketService, IndicatorService indicatorService, RiskManager riskManager,
+            PositionTracker positionTracker, OrderBookService orderBookService,
+            MultiTimeframeAnalyzer multiTimeframeAnalyzer, TelegramNotifier telegramNotifier) {
+        return new StrategyEngine(futuresBinanceService, webSocketService, indicatorService, riskManager,
+                positionTracker, orderBookService, multiTimeframeAnalyzer, telegramNotifier);
     }
 
     @Bean
