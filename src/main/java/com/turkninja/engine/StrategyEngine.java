@@ -241,7 +241,8 @@ public class StrategyEngine {
             boolean isBuySignal = false;
             String buyReason = "";
 
-            boolean trendUp = currentPrice > ema50_5m;
+            // EMA buffer: +0.3% to avoid sideways false signals
+            boolean trendUp = currentPrice > ema50_5m * 1.003;
             boolean momentumUp = rsi_5m > rsiLongMin && rsi_5m < rsiLongMax;
             boolean macdBullish = macd > (macdSignal + macdSignalTolerance);
 
@@ -254,6 +255,12 @@ public class StrategyEngine {
             }
 
             if (isBuySignal) {
+                // BTC Trend Check: Don't LONG if BTC is bearish
+                if (btcTrend.equals("BEARISH")) {
+                    logger.info("⏸️ {} LONG filtered - BTC trend bearish", symbol);
+                    return;
+                }
+
                 // Multi-Timeframe Confirmation: Check 1H trend
                 if (useMultiTimeframe && !multiTfAnalyzer.isSignalConfirmed(symbol, "BUY")) {
                     logger.info("⏸️ {} LONG signal filtered - 1H trend not bullish", symbol);
@@ -276,7 +283,8 @@ public class StrategyEngine {
             boolean isSellSignal = false;
             String sellReason = "";
 
-            boolean trendDown = currentPrice < ema50_5m;
+            // EMA buffer: -0.3% to avoid sideways false signals
+            boolean trendDown = currentPrice < ema50_5m * 0.997;
             boolean momentumDown = rsi_5m < rsiShortMax && rsi_5m > rsiShortMin;
             boolean macdBearish = macd < (macdSignal - macdSignalTolerance);
 
@@ -289,6 +297,12 @@ public class StrategyEngine {
             }
 
             if (isSellSignal) {
+                // BTC Trend Check: Don't SHORT if BTC is bullish
+                if (btcTrend.equals("BULLISH")) {
+                    logger.info("⏸️ {} SHORT filtered - BTC trend bullish", symbol);
+                    return;
+                }
+
                 // Multi-Timeframe Confirmation: Check 1H trend
                 if (useMultiTimeframe && !multiTfAnalyzer.isSignalConfirmed(symbol, "SELL")) {
                     logger.info("⏸️ {} SHORT signal filtered - 1H trend not bearish", symbol);
