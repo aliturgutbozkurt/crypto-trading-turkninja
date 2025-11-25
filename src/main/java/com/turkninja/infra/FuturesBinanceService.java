@@ -155,6 +155,28 @@ public class FuturesBinanceService {
         }
     }
 
+    /**
+     * Get available USDT balance for trading
+     */
+    public double getAvailableBalance() {
+        try {
+            String response = getAccountInfo();
+            JSONObject json = new JSONObject(response);
+            JSONArray assets = json.getJSONArray("assets");
+
+            for (int i = 0; i < assets.length(); i++) {
+                JSONObject asset = assets.getJSONObject(i);
+                if ("USDT".equals(asset.getString("asset"))) {
+                    return asset.getDouble("availableBalance");
+                }
+            }
+            return 0.0;
+        } catch (Exception e) {
+            logger.error("Failed to get available balance", e);
+            return 0.0;
+        }
+    }
+
     public String getPositionInfo() {
         try {
             return signedRequest("GET", "/fapi/v2/positionRisk", new LinkedHashMap<>());
