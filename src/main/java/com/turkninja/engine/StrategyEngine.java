@@ -301,12 +301,23 @@ public class StrategyEngine {
                         symbol, currentPrice, ema50_5m, rsi_5m, macd, macdSignal, trendUp, momentumUp, macdBullish);
             }
 
-            if (trendUp && momentumUp && macdBullish) {
+            // Changed to OR logic: At least 2 out of 3 conditions must be met
+            int conditionsMet = 0;
+            if (trendUp)
+                conditionsMet++;
+            if (momentumUp)
+                conditionsMet++;
+            if (macdBullish)
+                conditionsMet++;
+
+            if (conditionsMet >= 2) {
                 isBuySignal = true;
+                String conditions = String.format("TrendUp=%s, MomentumUp=%s, MACDBullish=%s", trendUp, momentumUp,
+                        macdBullish);
                 buyReason = String.format(
-                        "LONG: Trend UP (Price>EMA50) + Momentum (RSI %.0f) + MACD Bullish",
-                        rsi_5m);
-                logger.info("🟢 {} LONG Signal", symbol);
+                        "LONG: %d/3 conditions met (%s) RSI=%.0f",
+                        conditionsMet, conditions, rsi_5m);
+                logger.info("🟢 {} LONG Signal: {}", symbol, buyReason);
             }
 
             if (isBuySignal) {
@@ -354,12 +365,23 @@ public class StrategyEngine {
             boolean momentumDown = rsi_5m < rsiShortMax && rsi_5m > rsiShortMin;
             boolean macdBearish = macd < (macdSignal - macdSignalTolerance);
 
-            if (trendDown && momentumDown && macdBearish) {
+            // Changed to OR logic: At least 2 out of 3 conditions must be met
+            int conditionsMet = 0;
+            if (trendDown)
+                conditionsMet++;
+            if (momentumDown)
+                conditionsMet++;
+            if (macdBearish)
+                conditionsMet++;
+
+            if (conditionsMet >= 2) {
                 isSellSignal = true;
+                String conditions = String.format("TrendDown=%s, MomentumDown=%s, MACDBearish=%s", trendDown,
+                        momentumDown, macdBearish);
                 sellReason = String.format(
-                        "SHORT: Trend DOWN (Price<EMA50) + Momentum (RSI %.0f) + MACD Bearish",
-                        rsi_5m);
-                logger.info("🔴 {} SHORT Signal", symbol);
+                        "SHORT: %d/3 conditions met (%s) RSI=%.0f",
+                        conditionsMet, conditions, rsi_5m);
+                logger.info("🔴 {} SHORT Signal: {}", symbol, sellReason);
             }
 
             if (isSellSignal) {
