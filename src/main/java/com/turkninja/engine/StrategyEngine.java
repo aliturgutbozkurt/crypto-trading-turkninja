@@ -140,8 +140,8 @@ public class StrategyEngine {
                 String symbol = kline.getString("s");
                 String interval = kline.getString("i");
 
-                // We only care about 15m candles (as configured in WebSocketService)
-                if (!"15m".equals(interval))
+                // We only care about 5m candles (as configured in WebSocketService)
+                if (!"5m".equals(interval))
                     return;
 
                 // 1. Analyze BTC Trend first if it's BTC
@@ -217,7 +217,7 @@ public class StrategyEngine {
         try {
             String symbol = "BTCUSDT";
             // Get klines from WebSocket cache (NO REST API CALL)
-            List<JSONObject> klines = webSocketService.getCachedKlines(symbol, "15m", 100);
+            List<JSONObject> klines = webSocketService.getCachedKlines(symbol, "5m", 100);
             if (klines.isEmpty()) {
                 logger.warn("No cached klines for {}, skipping analysis", symbol);
                 return;
@@ -276,33 +276,33 @@ public class StrategyEngine {
                 symbolCooldown.remove(symbol);
             }
 
-            // 3. Fetch Data (15m only)
-            List<JSONObject> klines15m = webSocketService.getCachedKlines(symbol, "15m", 100);
+            // 3. Fetch Data (5m only)
+            List<JSONObject> klines5m = webSocketService.getCachedKlines(symbol, "5m", 100);
 
-            if (klines15m.isEmpty()) {
-                logger.warn("Insufficient cached klines for {} (15m: {}), skipping",
-                        symbol, klines15m.size());
+            if (klines5m.isEmpty()) {
+                logger.warn("Insufficient cached klines for {} (5m: {}), skipping",
+                        symbol, klines5m.size());
                 return;
             }
 
-            BarSeries series15m = convertCachedKlinesToBarSeries(symbol, klines15m);
+            BarSeries series5m = convertCachedKlinesToBarSeries(symbol, klines5m);
 
             // Calculate indicators from cached klines
-            Map<String, Double> indicators15m = indicatorService.calculateIndicators(series15m);
+            Map<String, Double> indicators5m = indicatorService.calculateIndicators(series5m);
 
             // Current Price
-            double currentPrice = series15m.getLastBar().getClosePrice().doubleValue();
+            double currentPrice = series5m.getLastBar().getClosePrice().doubleValue();
 
-            // 15m Trend Indicators
-            double ema50_15m = indicators15m.getOrDefault("EMA_50", currentPrice);
-            double rsi_15m = indicators15m.getOrDefault("RSI", 50.0);
-            double macd = indicators15m.getOrDefault("MACD", 0.0);
-            double macdSignal = indicators15m.getOrDefault("MACD_SIGNAL", 0.0);
+            // 5m Trend Indicators
+            double ema50_5m = indicators5m.getOrDefault("EMA_50", currentPrice);
+            double rsi_5m = indicators5m.getOrDefault("RSI", 50.0);
+            double macd = indicators5m.getOrDefault("MACD", 0.0);
+            double macdSignal = indicators5m.getOrDefault("MACD_SIGNAL", 0.0);
 
-            logger.info("{} | Price={} | 15m[RSI={:.1f}, EMA50={:.2f}, MACD={:.4f}/{:.4f}]",
-                    symbol, currentPrice, rsi_15m, ema50_15m, macd, macdSignal);
+            logger.info("{} | Price={} | 5m[RSI={:.1f}, EMA50={:.2f}, MACD={:.4f}/{:.4f}]",
+                    symbol, currentPrice, rsi_5m, ema50_5m, macd, macdSignal);
 
-            // --- 15-MINUTE STRATEGY (Trend + Momentum) ---
+            // --- 5-MINUTE STRATEGY (Trend + Momentum) ---
 
             // LONG Logic:
             // 1. Trend: Price > EMA 50
@@ -315,15 +315,15 @@ public class StrategyEngine {
             // EMA buffer: from config to avoid sideways false signals
             double emaMultiplierUp = 1 + emaBufferPercent;
             double emaMultiplierDown = 1 - emaBufferPercent;
-            boolean trendUp = currentPrice > ema50_15m * emaMultiplierUp;
-            boolean momentumUp = rsi_15m > rsiLongMin && rsi_15m < rsiLongMax;
+            boolean trendUp = currentPrice > ema50_5m * emaMultiplierUp;
+            boolean momentumUp = rsi_5m > rsiLongMin && rsi_5m < rsiLongMax;
             boolean macdBullish = macd > (macdSignal + macdSignalTolerance);
 
             // Debug: Log signal conditions every 10 candles
             if (Math.random() < 0.1) {
                 logger.info(
                         "🔍 {} Check: Price={}, EMA50={}, RSI={}, MACD={}/{}, TrendUp={}, MomentumUp={}, MACDBullish={}",
-                        symbol, currentPrice, ema50_15m, rsi_15m, macd, macdSignal, trendUp, momentumUp, macdBullish);
+                        symbol, currentPrice, ema50_5m, rsi_5m, macd, macdSignal, trendUp, momentumUp, macdBullish);
             }
 
             // Changed to AND logic: ALL 3 conditions must be met for higher quality signals
@@ -341,16 +341,16 @@ public class StrategyEngine {
                         trendUp, momentumUp, macdBullish);
                 buyReason = String.format(
                         "LONG: ALL conditions met (%s) RSI=%.0f",
-                        conditions, rsi_15m);
+                        conditions, rsi_5m);
                 logger.info("🟢 {} LONG Signal: {}", symbol, buyReason);
             }
 
             if (isBuySignal) {
                 // NWE Filter (if enabled)
-                if (nweEnabled && indicators15m.containsKey("NWE_BANDWIDTH_PERCENT")) {
-                    double nweUpper = indicators15m.getOrDefault("NWE_UPPER", 0.0);
-                    double nweLower = indicators15m.getOrDefault("NWE_LOWER", 0.0);
-                    double nweBandwidth = indicators15m.get("NWE_BANDWIDTH_PERCENT");
+                if (nweEnabled && indicators5m.containsKey("NWE_BANDWIDTH_PERCENT")) {
+                    double nweUpper = indicators5m.getOrDefault("NWE_UPPER", 0.0);
+                    double nweLower = indicators5m.getOrDefault("NWE_LOWER", 0.0);
+                    double nweBandwidth = indicators5m.get("NWE_BANDWIDTH_PERCENT");
 
                     // Skip if market is too choppy (narrow bands)
                     if (nweBandwidth < nweMinBandwidthPercent) {
@@ -371,10 +371,10 @@ public class StrategyEngine {
                 }
 
                 // RSI Bands Filter (if enabled)
-                if (rsiBandsEnabled && indicators15m.containsKey("RSI_BANDWIDTH")) {
-                    double rsiLowerBand = indicators15m.getOrDefault("RSI_LOWER_BAND", 0.0);
-                    double rsiUpperBand = indicators15m.getOrDefault("RSI_UPPER_BAND", 100.0);
-                    double rsiBandwidth = indicators15m.getOrDefault("RSI_BANDWIDTH", 0.0);
+                if (rsiBandsEnabled && indicators5m.containsKey("RSI_BANDWIDTH")) {
+                    double rsiLowerBand = indicators5m.getOrDefault("RSI_LOWER_BAND", 0.0);
+                    double rsiUpperBand = indicators5m.getOrDefault("RSI_UPPER_BAND", 100.0);
+                    double rsiBandwidth = indicators5m.getOrDefault("RSI_BANDWIDTH", 0.0);
 
                     // 1. Squeeze Filter: Skip if bands are too narrow (low volatility)
                     if (rsiBandwidth < rsiBandsMinWidth) {
@@ -382,20 +382,19 @@ public class StrategyEngine {
                                 symbol, rsiBandwidth, rsiBandsMinWidth);
                         return;
                     }
-
                     // 2. Dynamic Oversold Check: RSI should be near lower band
                     // Allow entry if RSI is below lower band OR within 10% of it
                     double threshold = rsiLowerBand + (rsiBandwidth * 0.2); // Lower 20% of the band
 
-                    if (rsi_15m > threshold) {
+                    if (rsi_5m > threshold) {
                         logger.info(
                                 "⏸️ {} LONG filtered - RSI ({:.2f}) too high relative to dynamic lower band ({:.2f})",
-                                symbol, rsi_15m, rsiLowerBand);
+                                symbol, rsi_5m, rsiLowerBand);
                         return;
                     }
 
                     logger.info("✅ {} LONG RSI Bands confirmed - RSI ({:.2f}) in buy zone (Lower Band: {:.2f})",
-                            symbol, rsi_15m, rsiLowerBand);
+                            symbol, rsi_5m, rsiLowerBand);
                 }
 
                 // BTC Trend Check: Don't LONG if BTC is bearish
@@ -413,7 +412,7 @@ public class StrategyEngine {
                 // Batch mode: Calculate score and add to batch
                 if (batchModeEnabled) {
                     SignalScore score = calculateSignalScore(symbol, "BUY", currentPrice,
-                            rsi_15m, macd, macdSignal, ema50_15m, 0);
+                            rsi_5m, macd, macdSignal, ema50_5m, 0);
                     signalBatch.addSignal(score);
                     logger.info("📊 Signal added to batch: {} BUY @ {} | Score: {}", symbol, currentPrice,
                             score.totalScore);
@@ -438,8 +437,8 @@ public class StrategyEngine {
             String sellReason = "";
 
             // EMA buffer: -0.3% to avoid sideways false signals
-            boolean trendDown = currentPrice < ema50_15m * emaMultiplierDown;
-            boolean momentumDown = rsi_15m < rsiShortMax && rsi_15m > rsiShortMin;
+            boolean trendDown = currentPrice < ema50_5m * emaMultiplierDown;
+            boolean momentumDown = rsi_5m < rsiShortMax && rsi_5m > rsiShortMin;
             boolean macdBearish = macd < (macdSignal - macdSignalTolerance);
 
             // Changed to AND logic: ALL 3 conditions must be met for higher quality signals
@@ -457,16 +456,16 @@ public class StrategyEngine {
                         momentumDown, macdBearish);
                 sellReason = String.format(
                         "SHORT: ALL conditions met (%s) RSI=%.0f",
-                        conditions, rsi_15m);
+                        conditions, rsi_5m);
                 logger.info("🔴 {} SHORT Signal: {}", symbol, sellReason);
             }
 
             if (isSellSignal) {
                 // NWE Filter (if enabled)
-                if (nweEnabled && indicators15m.containsKey("NWE_BANDWIDTH_PERCENT")) {
-                    double nweUpper = indicators15m.getOrDefault("NWE_UPPER", 0.0);
-                    double nweLower = indicators15m.getOrDefault("NWE_LOWER", 0.0);
-                    double nweBandwidth = indicators15m.get("NWE_BANDWIDTH_PERCENT");
+                if (nweEnabled && indicators5m.containsKey("NWE_BANDWIDTH_PERCENT")) {
+                    double nweUpper = indicators5m.getOrDefault("NWE_UPPER", 0.0);
+                    double nweLower = indicators5m.getOrDefault("NWE_LOWER", 0.0);
+                    double nweBandwidth = indicators5m.get("NWE_BANDWIDTH_PERCENT");
 
                     // Skip if market is too choppy (narrow bands)
                     if (nweBandwidth < nweMinBandwidthPercent) {
@@ -486,6 +485,34 @@ public class StrategyEngine {
                     }
                 }
 
+                // RSI Bands Filter (if enabled)
+                if (rsiBandsEnabled && indicators5m.containsKey("RSI_BANDWIDTH")) {
+                    double rsiLowerBand = indicators5m.getOrDefault("RSI_LOWER_BAND", 0.0);
+                    double rsiUpperBand = indicators5m.getOrDefault("RSI_UPPER_BAND", 100.0);
+                    double rsiBandwidth = indicators5m.getOrDefault("RSI_BANDWIDTH", 0.0);
+
+                    // 1. Squeeze Filter: Skip if bands are too narrow (low volatility)
+                    if (rsiBandwidth < rsiBandsMinWidth) {
+                        logger.info("⏸️ {} SHORT filtered - RSI Bands squeeze (Width: {:.2f} < {:.2f})",
+                                symbol, rsiBandwidth, rsiBandsMinWidth);
+                        return;
+                    }
+
+                    // 2. Dynamic Oversold Check: RSI should be near lower band
+                    // Allow entry if RSI is below lower band OR within 10% of it
+                    double threshold = rsiLowerBand + (rsiBandwidth * 0.2); // Lower 20% of the band
+
+                    if (rsi_5m < threshold) {
+                        logger.info(
+                                "⏸️ {} SHORT filtered - RSI ({:.2f}) too low relative to dynamic upper band ({:.2f})",
+                                symbol, rsi_5m, rsiUpperBand);
+                        return;
+                    }
+
+                    logger.info("✅ {} SHORT RSI Bands confirmed - RSI ({:.2f}) in sell zone (Upper Band: {:.2f})",
+                            symbol, rsi_5m, rsiUpperBand);
+                }
+
                 // BTC Trend Check: Don't SHORT if BTC is bullish
                 if (btcTrend.equals("BULLISH")) {
                     logger.info("⏸️ {} SHORT filtered - BTC trend bullish", symbol);
@@ -501,7 +528,7 @@ public class StrategyEngine {
                 // Batch mode: Calculate score and add to batch
                 if (batchModeEnabled) {
                     SignalScore score = calculateSignalScore(symbol, "SELL", currentPrice,
-                            rsi_15m, macd, macdSignal, ema50_15m, 0);
+                            rsi_5m, macd, macdSignal, ema50_5m, 0);
                     signalBatch.addSignal(score);
                     return; // Don't execute immediately
                 }
@@ -588,7 +615,7 @@ public class StrategyEngine {
                 return; // STOP HERE - Do not track position or send Telegram
             }
 
-            logger.info("✅ Order placed for {}: {} {} @ {}", symbol, side, quantity, price);
+            logger.info("✅ Order placed for {}: {} {} @ {}", symbol, quantity, price);
 
             // 7. Track Position (Only if successful)
             positionTracker.trackPosition(symbol, side, price, quantity);
@@ -699,28 +726,30 @@ public class StrategyEngine {
 
     public void analyze(String symbol) {
         try {
-            // 1. Fetch Data from WebSocket cache (NO REST API CALL)
-            List<JSONObject> klines = webSocketService.getCachedKlines(symbol, "15m", 100);
-            if (klines.isEmpty()) {
-                logger.warn("No cached klines for {}, skipping analysis", symbol);
+            // 1. Get Klines (5m)
+            List<JSONObject> klines5m = webSocketService.getCachedKlines(symbol, "5m", 200);
+            if (klines5m.size() < 50) {
+                logger.warn("Not enough 5m data for {}: {}", symbol, klines5m.size());
                 return;
             }
-            BarSeries series = convertCachedKlinesToBarSeries(symbol, klines);
 
-            // 2. Calculate Indicators
-            Map<String, Double> indicators = indicatorService.calculateIndicators(series);
+            // 2. Convert to BarSeries
+            BarSeries series5m = convertCachedKlinesToBarSeries(symbol, klines5m);
 
-            // 3. Get Current Price
-            double currentPrice = series.getLastBar().getClosePrice().doubleValue();
+            // 3. Calculate Indicators
+            Map<String, Double> indicators5m = indicatorService.calculateIndicators(series5m);
 
-            // 4. Get indicator values
-            double rsi = indicators.getOrDefault("RSI", 50.0);
-            double macd = indicators.getOrDefault("MACD", 0.0);
-            double lowerBB = indicators.getOrDefault("BB_LOWER", 0.0);
+            // 4. Extract Key Values
+            double currentPrice = series5m.getLastBar().getClosePrice().doubleValue();
+            double rsi_5m = indicators5m.getOrDefault("RSI", 50.0);
+            double macd = indicators5m.getOrDefault("MACD", 0.0);
+            double macdSignal = indicators5m.getOrDefault("MACD_SIGNAL", 0.0);
+            double ema50_5m = indicators5m.getOrDefault("EMA_50", currentPrice);
 
-            logger.debug("{} Analysis: Price={}, RSI={}, MACD={}, BB_Low={}", symbol, currentPrice, rsi, macd, lowerBB);
+            logger.debug("{} Analysis: Price={}, RSI={}, MACD={}, BB_Low={}", symbol, currentPrice, rsi_5m, macd,
+                    indicators5m.getOrDefault("BB_LOWER", 0.0));
 
-            if (rsi < 30 && currentPrice < lowerBB) {
+            if (rsi_5m < 30 && currentPrice < indicators5m.getOrDefault("BB_LOWER", 0.0)) {
                 logger.info("BUY SIGNAL for {} (Oversold + Below BB)", symbol);
             }
 
