@@ -674,8 +674,11 @@ public class StrategyEngine {
 
         // Execute entries for best signals
         for (SignalScore sig : bestSignals) {
-            if (!riskManager.canOpenNewPosition()) {
-                logger.info("⏸️ Cannot enter {} - risk limit reached", sig.symbol);
+            // Check if we can open more positions
+            int activePositions = positionTracker.getActivePositionCount();
+            int maxPositions = Integer.parseInt(Config.get("risk.max_positions", "3"));
+            if (activePositions >= maxPositions) {
+                logger.info("⏸️ Cannot enter {} - max positions ({}) reached", sig.symbol, maxPositions);
                 continue;
             }
 
