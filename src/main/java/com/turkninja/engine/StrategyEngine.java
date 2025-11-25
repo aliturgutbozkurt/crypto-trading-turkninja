@@ -547,13 +547,46 @@ public class StrategyEngine {
         double notionalValue = positionSizeUsdt * 20;
         double quantity = notionalValue / price;
 
-        // Round to appropriate precision (varies by symbol)
-        if (symbol.contains("BTC")) {
-            quantity = Math.round(quantity * 1000.0) / 1000.0; // 3 decimals
-        } else if (symbol.contains("ETH")) {
-            quantity = Math.round(quantity * 100.0) / 100.0; // 2 decimals
-        } else {
-            quantity = Math.round(quantity * 10.0) / 10.0; // 1 decimal
+        // Round to appropriate precision based on Binance symbol rules
+        // Reference: https://www.binance.com/en/futures/BTCUSDT (check "Quantity
+        // Precision")
+        switch (symbol) {
+            // 3 decimals (0.001)
+            case "BTCUSDT":
+            case "ETHUSDT":
+            case "BCHUSDT":
+                quantity = Math.floor(quantity * 1000.0) / 1000.0;
+                break;
+
+            // 2 decimals (0.01)
+            case "AVAXUSDT":
+            case "BNBUSDT":
+                quantity = Math.floor(quantity * 100.0) / 100.0;
+                break;
+
+            // 1 decimal (0.1)
+            case "SOLUSDT":
+            case "ALGOUSDT":
+            case "DOTUSDT":
+            case "ATOMUSDT":
+            case "LINKUSDT":
+                quantity = Math.floor(quantity * 10.0) / 10.0;
+                break;
+
+            // Integer (1.0) - no decimals
+            case "DOGEUSDT":
+            case "XRPUSDT":
+            case "MANAUSDT":
+            case "SANDUSDT":
+            case "NEARUSDT":
+            case "ADAUSDT":
+            case "ARBUSDT":
+                quantity = Math.floor(quantity);
+                break;
+
+            // Default: 1 decimal
+            default:
+                quantity = Math.floor(quantity * 10.0) / 10.0;
         }
 
         return quantity;
