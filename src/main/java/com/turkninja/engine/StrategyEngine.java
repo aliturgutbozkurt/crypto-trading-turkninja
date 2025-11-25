@@ -674,14 +674,6 @@ public class StrategyEngine {
 
         // Execute entries for best signals
         for (SignalScore sig : bestSignals) {
-            // Check if we can open more positions
-            int activePositions = positionTracker.getPositions().size();
-            int maxPositions = Integer.parseInt(Config.get("risk.max_positions", "3"));
-            if (activePositions >= maxPositions) {
-                logger.info("⏸️ Cannot enter {} - max positions ({}) reached", sig.symbol, maxPositions);
-                continue;
-            }
-
             logger.info("✅ Executing BEST signal: {} {}", sig.symbol, sig.side);
             executeEntry(sig.symbol, sig.side, sig.price);
         }
