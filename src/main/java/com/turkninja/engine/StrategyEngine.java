@@ -310,6 +310,14 @@ public class StrategyEngine {
 
             // --- 5-MINUTE STRATEGY (Trend + Momentum) ---
 
+            // Debug logging for specific symbols to trace signal generation
+            if (symbol.equals("ETHUSDT") || symbol.equals("SOLUSDT")) {
+                logger.info("🔍 Analysis for {}: Price={}, RSI={}, MACD={}, EMA50={}, NWE_Lower={}, ST_Dir={}",
+                        symbol, currentPrice, rsi_5m, macd, ema50_5m,
+                        indicators5m.getOrDefault("NWE_LOWER", 0.0),
+                        indicators5m.getOrDefault("SUPER_TREND_DIRECTION", 0.0));
+            }
+
             // LONG Logic:
             // 1. Trend: Price > EMA 50
             // 2. Momentum: RSI > 50 (Bullish) AND RSI < 70 (Not Overbought)
