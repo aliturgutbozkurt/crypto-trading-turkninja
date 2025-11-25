@@ -409,6 +409,12 @@ public class StrategyEngine {
                     return; // Skip this trade
                 }
 
+                // Order Book Confirmation (Imbalance + Walls)
+                if (!orderBookService.confirmBuySignal(symbol, currentPrice)) {
+                    logger.info("⏸️ {} LONG signal filtered by Order Book (Imbalance/Walls)", symbol);
+                    return;
+                }
+
                 // Batch mode: Calculate score and add to batch
                 if (batchModeEnabled) {
                     SignalScore score = calculateSignalScore(symbol, "BUY", currentPrice,
@@ -523,6 +529,12 @@ public class StrategyEngine {
                 if (useMultiTimeframe && !multiTfAnalyzer.isSignalConfirmed(symbol, "SELL")) {
                     logger.info("⏸️ {} SHORT signal filtered - 1H trend not bearish", symbol);
                     return; // Skip this trade
+                }
+
+                // Order Book Confirmation (Imbalance + Walls)
+                if (!orderBookService.confirmSellSignal(symbol, currentPrice)) {
+                    logger.info("⏸️ {} SHORT signal filtered by Order Book (Imbalance/Walls)", symbol);
+                    return;
                 }
 
                 // Batch mode: Calculate score and add to batch

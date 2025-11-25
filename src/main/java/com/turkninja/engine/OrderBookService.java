@@ -23,13 +23,19 @@ public class OrderBookService {
     private final double imbalanceThreshold;
     private final double maxSpreadPercent;
     private final double wallStdDevMultiplier;
+    private final double wallStdDevMultiplier;
     private final double maxSlippagePercent;
+    private final boolean wallFilterEnabled;
 
     public OrderBookService() {
         this.orderBooks = new ConcurrentHashMap<>();
         this.enabled = Config.getBoolean("orderbook.enabled", true);
         this.depthLevels = Config.getInt("orderbook.depth_levels", 20);
-        this.imbalanceThreshold = Config.getDouble("orderbook.imbalance_threshold", 0.3);
+        // Load strategy specific config with fallback to generic config
+        this.imbalanceThreshold = Config.getDouble("strategy.orderbook.min_imbalance",
+                Config.getDouble("orderbook.imbalance_threshold", 0.2));
+        this.wallFilterEnabled = Config.getBoolean("strategy.orderbook.wall_filter_enabled", true);
+
         this.maxSpreadPercent = Config.getDouble("orderbook.max_spread_percent", 0.001);
         this.wallStdDevMultiplier = Config.getDouble("orderbook.wall_stddev_multiplier", 2.0);
         this.maxSlippagePercent = Config.getDouble("orderbook.max_slippage_percent", 0.005);
@@ -253,11 +259,21 @@ public class OrderBookService {
             return false;
         }
 
-        // Buy wall detection (optional boost)
-        if (buyWall.isPresent() && currentPrice > buyWall.get()) {
+        // Buy wall detection (optional boost or filter)
+        if (wallFilterEnabled && buyWall.isPresent() && currentPrice > buyWall.get()) {
             logger.info("🟢 {} Buy Wall detected at {:.2f}, current price {:.2f} above wall - STRONG BUY",
                     symbol, buyWall.get(), currentPrice);
             return true;
+        } else if (wallFilterEnabled && detectSellWall(symbol).isPresent()) {
+            double sellWallPrice = detectSellWall(symbol).get();
+            // If price is very close to a sell wall (resistance), we might want to avoid
+            // buying
+            double distToWall = (sellWallPrice - currentPrice) / currentPrice;
+            if (distToWall < 0.002 && distToWall > 0) { // Within 0.2% of sell wall
+                logger.info("⏸️ {} BUY filtered - Price {:.2f} too close to Sell Wall at {:.2f}",
+                        symbol, currentPrice, sellWallPrice);
+                return false;
+            }
         }
 
         // All checks passed
@@ -293,10 +309,20 @@ public class OrderBookService {
         }
 
         // Sell wall detection
-        if (sellWall.isPresent() && currentPrice < sellWall.get()) {
+        if (wallFilterEnabled && sellWall.isPresent() && currentPrice < sellWall.get()) {
             logger.info("🔴 {} Sell Wall detected at {:.2f}, current price {:.2f} below wall - STRONG SELL",
                     symbol, sellWall.get(), currentPrice);
             return true;
+        } else if (wallFilterEnabled && detectBuyWall(symbol).isPresent()) {
+            double buyWallPrice = detectBuyWall(symbol).get();
+            // If price is very close to a buy wall (support), we might want to avoid
+            // selling
+            double distToWall = (currentPrice - buyWallPrice) / currentPrice;
+            if (distToWall < 0.002 && distToWall > 0) { // Within 0.2% of buy wall
+                logger.info("⏸️ {} SELL filtered - Price {:.2f} too close to Buy Wall at {:.2f}",
+                        symbol, currentPrice, buyWallPrice);
+                return false;
+            }
         }
 
         logger.debug("{} Order book confirms SELL: imbalance={:.2f}, spread={:.4f}%",
