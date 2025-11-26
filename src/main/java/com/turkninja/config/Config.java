@@ -67,4 +67,11 @@ public class Config {
     public static final String MONGODB_URI = "MONGODB_URI";
     public static final String DB_NAME = "DB_NAME";
     public static final String DRY_RUN = "DRY_RUN";
+
+    /**
+     * Set a property value (useful for testing)
+     */
+    public static void setProperty(String key, String value) {
+        properties.setProperty(key, value);
+    }
 }

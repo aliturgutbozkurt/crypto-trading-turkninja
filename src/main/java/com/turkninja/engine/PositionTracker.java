@@ -19,6 +19,7 @@ public class PositionTracker {
 
     private final TradeRepository tradeRepository;
     private final RiskManager riskManager;
+    private KellyPositionSizer kellyPositionSizer; // Optional: for dynamic position sizing
     private final Map<String, Position> activePositions = new ConcurrentHashMap<>();
 
     // Configuration for Active Trading (Percentage-based)
@@ -119,6 +120,18 @@ public class PositionTracker {
                 } else {
                     pnl = (position.entryPrice - exitPrice) * position.quantity;
                 }
+            }
+
+            // Record trade to Kelly Position Sizer (for dynamic sizing)
+            if (kellyPositionSizer != null && exitPrice > 0) {
+                boolean isWin = pnl > 0;
+                // Calculate profit ratio: (PnL / Position Size)
+                double positionSize = position.entryPrice * position.quantity;
+                double profitRatio = positionSize > 0 ? pnl / positionSize : 0.0;
+
+                kellyPositionSizer.recordTrade(isWin, profitRatio);
+                logger.debug("📊 Kelly: Recorded trade {} - Win: {}, Ratio: {:.4f}",
+                        symbol, isWin, profitRatio);
             }
 
             updatePositionInDb(position, "CLOSED", exitPrice, pnl);
@@ -289,5 +302,13 @@ public class PositionTracker {
 
     public TradeRepository getTradeRepository() {
         return tradeRepository;
+    }
+
+    /**
+     * Set Kelly Position Sizer for dynamic position sizing based on trade history
+     */
+    public void setKellyPositionSizer(KellyPositionSizer kellyPositionSizer) {
+        this.kellyPositionSizer = kellyPositionSizer;
+        logger.info("Kelly Position Sizer connected to PositionTracker");
     }
 }

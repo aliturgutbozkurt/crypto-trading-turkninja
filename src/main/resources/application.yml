@@ -1,0 +1,24 @@
+resilience4j:
+  retry:
+    instances:
+      binanceApi:
+        maxAttempts: 3
+        waitDuration: 1s
+        exponentialBackoffMultiplier: 2
+        retryExceptions:
+          - java.net.SocketTimeoutException
+          - java.net.ConnectException
+          - org.json.JSONException
+        ignoreExceptions:
+          - java.lang.IllegalArgumentException
+          - java.lang.NullPointerException
+  
+  circuitbreaker:
+    instances:
+      binanceApi:
+        failureRateThreshold: 50
+        waitDurationInOpenState: 30s
+        permittedNumberOfCallsInHalfOpenState: 3
+        slidingWindowSize: 10
+        minimumNumberOfCalls: 5
+        automaticTransitionFromOpenToHalfOpenEnabled: true

@@ -232,4 +232,22 @@ public class IndicatorService {
             double volume) {
         series.addBar(time, open, high, low, close, volume);
     }
+
+    /**
+     * Get Average True Range (ATR) for volatility measurement (Phase 2.1)
+     * Used for risk-normalized position sizing
+     * 
+     * @param series Bar series
+     * @param period ATR period (typically 14)
+     * @return ATR value
+     */
+    public double getATR(BarSeries series, int period) {
+        if (series == null || series.getBarCount() < period) {
+            return 0.0;
+        }
+
+        org.ta4j.core.indicators.ATRIndicator atr = new org.ta4j.core.indicators.ATRIndicator(series, period);
+
+        return atr.getValue(series.getEndIndex()).doubleValue();
+    }
 }

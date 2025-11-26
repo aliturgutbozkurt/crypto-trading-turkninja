@@ -20,6 +20,13 @@ public class TelegramNotifier {
     private final boolean enabled;
     private final OkHttpClient client;
 
+    // Security: Whitelist of allowed chat IDs (Phase 5.2)
+    private final String[] whitelist;
+
+    // Rate limiting: Track last message time to prevent spam (Phase 5.2)
+    private long lastMessageTime = 0;
+    private static final long MIN_MESSAGE_INTERVAL_MS = 1000; // 1 second between messages
+
     public enum AlertLevel {
         INFO,
         WARNING,
@@ -32,8 +39,13 @@ public class TelegramNotifier {
         this.chatId = Config.get("telegram.chat.id", "");
         this.client = new OkHttpClient();
 
+        // Load whitelist (allow multiple chat IDs separated by comma)
+        String whitelistStr = Config.get("telegram.whitelist", chatId);
+        this.whitelist = whitelistStr.split(",");
+
         if (enabled && !botToken.isEmpty() && !chatId.isEmpty()) {
-            logger.info("✅ Telegram notifications enabled (Chat ID: {})", chatId);
+            logger.info("✅ Telegram notifications enabled (Chat ID: {}, Whitelist: {} IDs)",
+                    chatId, whitelist.length);
         } else if (enabled) {
             logger.warn("⚠️ Telegram enabled but token/chatId missing. Notifications disabled.");
         }
@@ -157,9 +169,23 @@ public class TelegramNotifier {
     }
 
     /**
-     * Send raw message to Telegram
+     * Send raw message to Telegram with security checks (Phase 5.2)
      */
     private void sendMessage(String text) {
+        // Security: Validate chat ID is in whitelist
+        if (!isWhitelisted(chatId)) {
+            logger.warn("⚠️ Attempted to send message to non-whitelisted chat ID: {}", chatId);
+            return;
+        }
+
+        // Rate limiting: Prevent spam
+        long now = System.currentTimeMillis();
+        if (now - lastMessageTime < MIN_MESSAGE_INTERVAL_MS) {
+            logger.debug("⏸️ Rate limit: Message skipped (too soon after last message)");
+            return;
+        }
+        lastMessageTime = now;
+
         try {
             String url = String.format("https://api.telegram.org/bot%s/sendMessage", botToken);
 
@@ -185,6 +211,30 @@ public class TelegramNotifier {
         } catch (IOException e) {
             logger.error("Error sending Telegram notification", e);
         }
+    }
+
+    /**
+     * Check if a chat ID is whitelisted (Phase 5.2)
+     */
+    private boolean isWhitelisted(String checkChatId) {
+        for (String allowedId : whitelist) {
+            if (allowedId.trim().equals(checkChatId.trim())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Validate incoming message (for bot commands - future use)
+     * Call this before processing any user commands
+     */
+    public boolean validateIncomingMessage(String fromChatId) {
+        if (!isWhitelisted(fromChatId)) {
+            logger.warn("⛔ Unauthorized message from chat ID: {}", fromChatId);
+            return false;
+        }
+        return true;
     }
 
     public boolean isEnabled() {

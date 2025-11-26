@@ -1,5 +1,6 @@
 package com.turkninja.engine;
 
+import com.turkninja.engine.criteria.*;
 import com.turkninja.infra.FuturesBinanceService;
 import com.turkninja.infra.FuturesWebSocketService;
 import com.turkninja.infra.TelegramNotifier;
@@ -11,16 +12,21 @@ import org.json.JSONObject;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.ta4j.core.BarSeries;
+import org.ta4j.core.BaseBarSeriesBuilder;
+
+import java.math.BigDecimal;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
-import java.util.Arrays;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.CompletableFuture;
+import java.util.function.Supplier;
 
 public class StrategyEngine {
     private static final Logger logger = LoggerFactory.getLogger(StrategyEngine.class);
@@ -30,6 +36,9 @@ public class StrategyEngine {
     private final RiskManager riskManager;
     private final PositionTracker positionTracker;
     private final OrderBookService orderBookService;
+    private final MultiTimeframeService multiTimeframeService; // MTF Analysis (Phase 2)
+    private final AdaptiveParameterService adaptiveParamService; // Adaptive Parameters (Phase 1.1)
+    private final KellyPositionSizer kellyPositionSizer; // Kelly Criterion Position Sizing (Phase 1.1)
 
     private final TelegramNotifier telegram;
     private WebSocketPushService webSocketPushService; // Optional, for UI notifications
@@ -49,9 +58,11 @@ public class StrategyEngine {
     private int batchTopN;
     private double minSignalScore;
 
-    // Position sizing parameters
-    // private static final double MAX_POSITION_PERCENT = 0.25; // Moved to Config
-    // private static final double MIN_POSITION_USDT = 4.0; // Moved to Config
+    // Async order execution (Phase 1.2)
+    private final ExecutorService orderExecutor;
+
+    // Strategy Filters (Phase 2 - Chain of Responsibility)
+    private final List<StrategyCriteria> strategyFilters;
 
     public StrategyEngine(FuturesWebSocketService webSocketService, FuturesBinanceService futuresService,
             IndicatorService indicatorService, RiskManager riskManager, PositionTracker positionTracker,
@@ -63,7 +74,37 @@ public class StrategyEngine {
         this.positionTracker = positionTracker;
         this.orderBookService = orderBookService;
 
+        // Initialize Multi-Timeframe Analysis (Phase 2)
+        this.multiTimeframeService = new MultiTimeframeService(webSocketService, indicatorService);
+
+        // Initialize Adaptive Parameters (Phase 1.1)
+        this.adaptiveParamService = new AdaptiveParameterService(indicatorService);
+
+        // Initialize Kelly Criterion Position Sizer (Phase 1.1)
+        this.kellyPositionSizer = new KellyPositionSizer();
+        logger.info("✅ Kelly Position Sizer initialized: enabled={}, hasSufficientHistory={}",
+                kellyPositionSizer.isEnabled(), kellyPositionSizer.hasSufficientHistory());
+
+        // Connect Kelly to PositionTracker for trade recording
+        positionTracker.setKellyPositionSizer(kellyPositionSizer);
+
         this.telegram = telegram;
+
+        // Initialize Strategy Filters (Phase 2)
+        this.strategyFilters = new ArrayList<>();
+        this.strategyFilters.add(new ADXTrendStrengthFilter());
+        this.strategyFilters.add(new EMASlopeFilter(indicatorService));
+        this.strategyFilters.add(new EMAAlignmentFilter());
+        this.strategyFilters.add(new RSIMomentumFilter(adaptiveParamService));
+        this.strategyFilters.add(new MACDConfirmationFilter());
+        this.strategyFilters.add(new VolumeConfirmationFilter(indicatorService));
+
+        logger.info("✅ Strategy Filters initialized: {}", strategyFilters.size());
+
+        // Initialize async order executor with Virtual Threads (Phase 1.2)
+        this.orderExecutor = Executors.newVirtualThreadPerTaskExecutor();
+        logger.info("✅ Async order executor initialized with Virtual Threads");
+
         // Load configurable entry filter parameters
         rsiLongMin = Double.parseDouble(Config.get("strategy.rsi.long.min", "50"));
         rsiLongMax = Double.parseDouble(Config.get("strategy.rsi.long.max", "78"));
@@ -86,12 +127,6 @@ public class StrategyEngine {
         volumeFilterEnabled = Boolean.parseBoolean(Config.get("strategy.volume.filter.enabled", "true"));
         volumeMinMultiplier = Double.parseDouble(Config.get("strategy.volume.min.multiplier", "1.2"));
         volumePeriod = Integer.parseInt(Config.get("strategy.volume.period", "20"));
-
-        // Load new RSI ranges for high win rate (avoid reversal zones)
-        rsiLongMinNew = Double.parseDouble(Config.get("strategy.rsi.long.min", "50"));
-        rsiLongMaxNew = Double.parseDouble(Config.get("strategy.rsi.long.max", "70"));
-        rsiShortMinNew = Double.parseDouble(Config.get("strategy.rsi.short.min", "30"));
-        rsiShortMaxNew = Double.parseDouble(Config.get("strategy.rsi.short.max", "50"));
 
         logger.info(
                 "Strategy Config Loaded: RSI [{}-{}] / [{}-{}], EMA Buffer: {}%, Multi-TF: {}, ADX: {}, EMA Slope: {}, Volume: {}",
@@ -125,11 +160,8 @@ public class StrategyEngine {
     private double volumeMinMultiplier;
     private int volumePeriod;
 
-    // New RSI ranges for avoiding reversal zones
-    private double rsiLongMinNew;
-    private double rsiLongMaxNew;
-    private double rsiShortMinNew;
-    private double rsiShortMaxNew;
+    // Note: RSI ranges are now dynamically calculated by AdaptiveParameterService
+    // instead of static fields (Phase 1.1)
 
     private volatile String btcTrend = "NEUTRAL"; // BULLISH, BEARISH, NEUTRAL
 
@@ -278,7 +310,30 @@ public class StrategyEngine {
         }
 
         try {
-            logger.info("🟢 Analysis starting for {}: tradingActive={}", symbol, tradingActive);
+            // Fetch Data (5m only)
+            List<JSONObject> klines5m = webSocketService.getCachedKlines(symbol, "5m", 100);
+
+            if (klines5m.isEmpty()) {
+                logger.warn("Insufficient cached klines for {} (5m: {}), skipping",
+                        symbol, klines5m.size());
+                return;
+            }
+
+            BarSeries series5m = convertCachedKlinesToBarSeries(symbol, klines5m);
+
+            // Delegate to core logic
+            analyzeAndTrade(symbol, series5m);
+
+        } catch (Exception e) {
+            logger.error("Error analyzing symbol: " + symbol, e);
+        }
+    }
+
+    /**
+     * Core strategy logic - accepts BarSeries for backtesting support
+     */
+    public void analyzeAndTrade(String symbol, BarSeries series5m) {
+        try {
             // 1. Check if we already have a position
             if (hasActivePosition(symbol)) {
                 logger.debug("Skipping {} - already has active position", symbol);
@@ -298,18 +353,7 @@ public class StrategyEngine {
                 symbolCooldown.remove(symbol);
             }
 
-            // 3. Fetch Data (5m only)
-            List<JSONObject> klines5m = webSocketService.getCachedKlines(symbol, "5m", 100);
-
-            if (klines5m.isEmpty()) {
-                logger.warn("Insufficient cached klines for {} (5m: {}), skipping",
-                        symbol, klines5m.size());
-                return;
-            }
-
-            BarSeries series5m = convertCachedKlinesToBarSeries(symbol, klines5m);
-
-            // Calculate indicators from cached klines
+            // Calculate indicators
             Map<String, Double> indicators5m = indicatorService.calculateIndicators(series5m);
 
             // Current Price
@@ -328,105 +372,46 @@ public class StrategyEngine {
 
             // Debug logging for specific symbols to trace signal generation
             if (symbol.equals("ETHUSDT") || symbol.equals("SOLUSDT")) {
-                logger.info("🔍 Analysis for {}: Price={}, RSI={}, MACD={}, EMA50={}, NWE_Lower={}, ST_Dir={}",
-                        symbol, currentPrice, rsi_5m, macd, ema50_5m,
-                        indicators5m.getOrDefault("NWE_LOWER", 0.0),
-                        indicators5m.getOrDefault("SUPER_TREND_DIRECTION", 0.0));
+                logger.info("🔍 Analysis for {}: Price={}, RSI={}, MACD={}, EMA50={}",
+                        symbol, currentPrice, rsi_5m, macd, ema50_5m);
             }
 
-            // **HIGH WIN RATE STRATEGY - MULTI-LAYER FILTERING**
+            // **HIGH WIN RATE STRATEGY - MODULAR FILTER CHAIN**
 
-            // ========== LAYER 1: ADX TREND STRENGTH (Avoid Sideways Markets) ==========
-            if (adxEnabled && indicators5m.containsKey("ADX")) {
-                double adx = indicators5m.get("ADX");
-                if (adx < adxMinStrength) {
-                    logger.info("⏸️ {} LONG filtered - ADX too low ({:.2f} < {:.2f}) - Sideways market",
-                            symbol, adx, adxMinStrength);
-                    return; // Exit immediately - no trades in sideways markets
-                }
-                logger.debug("✅ {} ADX check passed: {:.2f}", symbol, adx);
-            }
+            // 1. Evaluate LONG Criteria
+            boolean longPassed = true;
+            String longFailReason = null;
 
-            // ========== LAYER 2: EMA SLOPE (Trend Momentum) ==========
-            if (emaSlopeEnabled) {
-                double slope = indicatorService.calculateEMASlope(series5m, emaSlopePeriod, emaSlopeLookback);
-                if (slope < emaSlopeMinPercent) {
-                    logger.info("⏸️ {} LONG filtered - EMA slope too flat ({:.3f}% < {:.3f}%)",
-                            symbol, slope, emaSlopeMinPercent);
-                    return; // Not enough upward momentum
-                }
-                logger.debug("✅ {} EMA slope check passed: {:.3f}%", symbol, slope);
-            }
-
-            // ========== LAYER 3: EMA ALIGNMENT (Bullish Structure) ==========
-            double ema21_5m = indicators5m.getOrDefault("EMA_21", currentPrice);
-            boolean emaAlignment = currentPrice > ema21_5m && ema21_5m > ema50_5m;
-            if (!emaAlignment) {
-                logger.debug("⏸️ {} LONG filtered - EMA alignment broken (Price:{}, EMA21:{}, EMA50:{})",
-                        symbol, currentPrice, ema21_5m, ema50_5m);
-                return;
-            }
-
-            boolean isBuySignal = false;
-            String buyReason = "";
-
-            // ========== LAYER 4: RSI MOMENTUM (Avoid Reversal Zones) ==========
-            // Use new RSI ranges: 50-70 (momentum without overbought)
-            boolean momentumUp = rsi_5m > rsiLongMinNew && rsi_5m < rsiLongMaxNew;
-
-            // ========== LAYER 5: MACD CONFIRMATION ==========
-            boolean macdBullish = macd > (macdSignal + macdSignalTolerance);
-
-            // ========== LAYER 6: VOLUME CONFIRMATION ==========
-            boolean volumeOk = true;
-            if (volumeFilterEnabled) {
-                volumeOk = indicatorService.checkVolumeConfirmation(series5m, volumeMinMultiplier, volumePeriod);
-                if (!volumeOk) {
-                    logger.debug("⏸️ {} LONG filtered - Volume too low", symbol);
-                    return;
+            for (StrategyCriteria filter : strategyFilters) {
+                if (!filter.evaluate(symbol, series5m, indicators5m, currentPrice, true)) {
+                    longPassed = false;
+                    longFailReason = filter.getFailureReason(symbol, series5m, indicators5m, currentPrice, true);
+                    // logger.debug("⏸️ {} LONG filtered by: {}", symbol, filter.getFilterName());
+                    break;
                 }
             }
 
-            // Debug: Log signal conditions
-            if (Math.random() < 0.1) {
-                logger.info(
-                        "🔍 {} Check: Price={}, EMA21={}, EMA50={}, RSI={}, MACD={}/{}, MomentumUp={}, MACDBullish={}",
-                        symbol, currentPrice, ema21_5m, ema50_5m, rsi_5m, macd, macdSignal, momentumUp, macdBullish);
-            }
-
-            // **ALL conditions must be met for LONG**
-            int conditionsMet = 0;
-            if (emaAlignment)
-                conditionsMet++;
-            if (momentumUp)
-                conditionsMet++;
-            if (macdBullish)
-                conditionsMet++;
-
-            if (conditionsMet == 3) {
-                isBuySignal = true;
-                String conditions = String.format("Trend=%s, Momentum=%s, MACD=%s",
-                        emaAlignment, momentumUp, macdBullish);
-                buyReason = String.format(
-                        "LONG: ALL conditions met (%s) RSI=%.0f",
-                        conditions, rsi_5m);
-                logger.info("🟢 {} LONG Signal: {}", symbol, buyReason);
-            }
-
-            if (isBuySignal) {
-                // Disabled filters removed (NWE, RSI Bands, Super Trend)
-
+            if (longPassed) {
                 // BTC Trend Check: Don't LONG if BTC is bearish
                 if (btcTrend.equals("BEARISH")) {
                     logger.info("⏸️ {} LONG filtered - BTC trend bearish", symbol);
-                    return;
+                    longPassed = false;
+                }
+
+                // Multi-Timeframe Filter: Don't LONG if higher TF is bearish (Phase 2)
+                else if (!multiTimeframeService.allowLong(symbol)) {
+                    longPassed = false; // Already logged in MTF service
                 }
 
                 // Order Book Confirmation (Imbalance + Walls)
-                if (!orderBookService.confirmBuySignal(symbol, currentPrice)) {
+                else if (!orderBookService.confirmBuySignal(symbol, currentPrice)) {
                     logger.info("⏸️ {} LONG signal filtered by Order Book (Imbalance/Walls)", symbol);
-                    return;
+                    longPassed = false;
                 }
+            }
+
+            if (longPassed) {
+                String buyReason = String.format("LONG: All filters passed. RSI=%.0f", rsi_5m);
 
                 // Batch mode: Calculate score and add to batch
                 if (batchModeEnabled) {
@@ -444,100 +429,45 @@ public class StrategyEngine {
                 System.out.println(msg);
                 // Push signal to UI before executing
                 pushSignal(symbol, "BUY", buyReason, currentPrice, true, "PENDING");
-                executeEntry(symbol, "BUY", currentPrice);
+                // ========== EXECUTE (ASYNC) ==========
+                submitOrderAsync(symbol, "BUY", currentPrice);
+                return; // Exit after LONG signal
             }
 
-            // SHORT Logic:
-            // 1. Trend: Price < EMA 50
-            // 2. Momentum: RSI < 50 (Bearish) AND RSI > 30 (Not Oversold)
-            // 3. Confirmation: MACD < Signal (Bearish Alignment)
+            // 2. Evaluate SHORT Criteria
+            boolean shortPassed = true;
+            String shortFailReason = null;
 
-            // **SAME MULTI-LAYER FILTERING FOR SHORT**
-
-            // ========== LAYER 1: ADX TREND STRENGTH (Avoid Sideways) ==========
-            // Same ADX check - sideways market blocks both LONG and SHORT
-            if (adxEnabled && indicators5m.containsKey("ADX")) {
-                double adx = indicators5m.get("ADX");
-                if (adx < adxMinStrength) {
-                    logger.info("⏸️ {} SHORT filtered - ADX too low ({:.2f} < {:.2f}) - Sideways market",
-                            symbol, adx, adxMinStrength);
-                    return; // Exit immediately
+            for (StrategyCriteria filter : strategyFilters) {
+                if (!filter.evaluate(symbol, series5m, indicators5m, currentPrice, false)) {
+                    shortPassed = false;
+                    shortFailReason = filter.getFailureReason(symbol, series5m, indicators5m, currentPrice, false);
+                    // logger.debug("⏸️ {} SHORT filtered by: {}", symbol, filter.getFilterName());
+                    break;
                 }
             }
 
-            // ========== LAYER 2: EMA SLOPE (Downtrend Momentum) ==========
-            if (emaSlopeEnabled) {
-                double slope = indicatorService.calculateEMASlope(series5m, emaSlopePeriod, emaSlopeLookback);
-                if (slope > -emaSlopeMinPercent) { // Note: negative for downtrend
-                    logger.info("⏸️ {} SHORT filtered - EMA slope too flat ({:.3f}% > -{:.3f}%)",
-                            symbol, slope, emaSlopeMinPercent);
-                    return; // Not enough downward momentum
-                }
-                logger.debug("✅ {} EMA slope check passed (bearish): {:.3f}%", symbol, slope);
-            }
-
-            // ========== LAYER 3: EMA ALIGNMENT (Bearish Structure) ==========
-            boolean isSellSignal = false;
-            String sellReason = "";
-
-            // SHORT logic: same filters as LONG but reversed
-            // Use new RSI ranges for SHORT: 30-50 (weakness without oversold)
-            boolean trendDown = currentPrice < ema21_5m && ema21_5m < ema50_5m; // Bearish alignment
-            if (!trendDown) {
-                logger.debug("⏸️ {} SHORT filtered - EMA alignment broken (Price:{}, EMA21:{}, EMA50:{})",
-                        symbol, currentPrice, ema21_5m, ema50_5m);
-                return;
-            }
-
-            // ========== LAYER 4: RSI RANGE (Avoid Reversal Zones) ==========
-            boolean momentumDown = rsi_5m < rsiShortMaxNew && rsi_5m > rsiShortMinNew;
-
-            // ========== LAYER 5: MACD CONFIRMATION ==========
-            boolean macdBearish = macd < (macdSignal - macdSignalTolerance);
-
-            // ========== LAYER 6: VOLUME CONFIRMATION ==========
-            boolean volumeOkShort = true;
-            if (volumeFilterEnabled) {
-                volumeOkShort = indicatorService.checkVolumeConfirmation(series5m, volumeMinMultiplier, volumePeriod);
-                if (!volumeOkShort) {
-                    logger.debug("⏸️ {} SHORT filtered - Volume too low", symbol);
-                    return;
-                }
-            }
-
-            // **ALL conditions must be met for SHORT**
-            int conditionsMetShort = 0;
-            if (trendDown)
-                conditionsMetShort++;
-            if (momentumDown)
-                conditionsMetShort++;
-            if (macdBearish)
-                conditionsMetShort++;
-
-            if (conditionsMetShort == 3) {
-                isSellSignal = true;
-                String conditions = String.format("Trend=%s, Momentum=%s, MACD=%s", trendDown,
-                        momentumDown, macdBearish);
-                sellReason = String.format(
-                        "SHORT: ALL conditions met (%s) RSI=%.0f",
-                        conditions, rsi_5m);
-                logger.info("🔴 {} SHORT Signal: {}", symbol, sellReason);
-            }
-
-            if (isSellSignal) {
-                // Disabled filters removed (NWE, RSI Bands, Super Trend)
-
+            if (shortPassed) {
                 // BTC Trend Check: Don't SHORT if BTC is bullish
                 if (btcTrend.equals("BULLISH")) {
                     logger.info("⏸️ {} SHORT filtered - BTC trend bullish", symbol);
-                    return;
+                    shortPassed = false;
+                }
+
+                // Multi-Timeframe Filter: Don't SHORT if higher TF is bullish (Phase 2)
+                else if (!multiTimeframeService.allowShort(symbol)) {
+                    shortPassed = false; // Already logged in MTF service
                 }
 
                 // Order Book Confirmation (Imbalance + Walls)
-                if (!orderBookService.confirmSellSignal(symbol, currentPrice)) {
+                else if (!orderBookService.confirmSellSignal(symbol, currentPrice)) {
                     logger.info("⏸️ {} SHORT signal filtered by Order Book (Imbalance/Walls)", symbol);
-                    return;
+                    shortPassed = false;
                 }
+            }
+
+            if (shortPassed) {
+                String sellReason = String.format("SHORT: All filters passed. RSI=%.0f", rsi_5m);
 
                 // Batch mode: Calculate score and add to batch
                 if (batchModeEnabled) {
@@ -553,12 +483,36 @@ public class StrategyEngine {
                 System.out.println(msg);
                 // Push signal to UI before executing
                 pushSignal(symbol, "SELL", sellReason, currentPrice, true, "PENDING");
-                executeEntry(symbol, "SELL", currentPrice);
+                // ========== EXECUTE (ASYNC) ==========
+                submitOrderAsync(symbol, "SELL", currentPrice);
             }
 
         } catch (Exception e) {
             logger.error("Error analyzing symbol: " + symbol, e);
         }
+    }
+
+    /**
+     * Submit order asynchronously (Phase 1.2)
+     * Non-blocking execution using Virtual Threads
+     */
+    private void submitOrderAsync(String symbol, String side, double price) {
+        CompletableFuture.runAsync(() -> {
+            try {
+                executeEntry(symbol, side, price);
+            } catch (Exception e) {
+                logger.error("❌ Async order failed for {} {}", symbol, side, e);
+                telegram.sendAlert(TelegramNotifier.AlertLevel.CRITICAL, String.format(
+                        "⚠️ Order Failure\n%s %s @ %.2f\nError: %s",
+                        symbol, side, price, e.getMessage()));
+            }
+        }, orderExecutor)
+                .exceptionally(ex -> {
+                    logger.error("❌ Uncaught async exception for {} {}", symbol, side, ex);
+                    return null;
+                });
+
+        logger.debug("✅ {} {} order submitted async", symbol, side);
     }
 
     private void executeEntry(String symbol, String side, double price) {
@@ -678,6 +632,22 @@ public class StrategyEngine {
             JSONObject account = new JSONObject(accountJson);
             double availableBalance = account.getDouble("availableBalance");
 
+            // Priority 1: Kelly Criterion (if enabled and has sufficient history)
+            if (kellyPositionSizer.isEnabled() && kellyPositionSizer.hasSufficientHistory()) {
+                double kellySize = kellyPositionSizer.getPositionSize(symbol, availableBalance);
+                if (kellySize > 0) {
+                    return kellySize;
+                }
+                // If Kelly fails, fall through to next method
+            }
+
+            // Priority 2: ATR-based sizing (Phase 2.1)
+            boolean atrEnabled = Boolean.parseBoolean(Config.get("strategy.position.atr.enabled", "false"));
+            if (atrEnabled) {
+                return calculateATRBasedPositionSize(symbol, price, availableBalance);
+            }
+
+            // Priority 3: Fallback to fixed percentage
             double maxPercent = Config.getDouble("strategy.position.max_percent", 0.25);
             double positionSize = availableBalance * maxPercent;
 
@@ -688,7 +658,61 @@ public class StrategyEngine {
 
         } catch (Exception e) {
             logger.error("Error calculating position size", e);
-            return Config.getDouble("strategy.position.min_usdt", 4.0);
+            return 0;
+        }
+    }
+
+    /**
+     * Calculate position size based on ATR (Average True Range) for risk
+     * normalization (Phase 2.1)
+     * Formula: Position Size = Risk Amount / (Stop Distance %)
+     * This ensures every trade risks the same dollar amount regardless of
+     * volatility
+     */
+    private double calculateATRBasedPositionSize(String symbol, double price, double balance) {
+        try {
+            // Get current bar series
+            BarSeries series = convertToBarSeries(symbol, "15m");
+            if (series == null || series.getBarCount() < 20) {
+                logger.warn("Insufficient data for ATR sizing on {}, using fallback", symbol);
+                return balance * 0.25; // Fallback
+            }
+
+            // Load ATR parameters
+            int atrPeriod = Integer.parseInt(Config.get("strategy.position.atr.period", "14"));
+            double atrMultiplier = Double.parseDouble(Config.get("strategy.position.atr.multiplier", "2.0"));
+            double riskPercent = Double.parseDouble(Config.get("strategy.position.risk.percent", "0.01"));
+
+            // Calculate ATR
+            double atr = indicatorService.getATR(series, atrPeriod);
+            if (atr == 0) {
+                logger.warn("ATR is zero for {}, using fallback", symbol);
+                return balance * 0.25;
+            }
+
+            // Stop distance = ATR × multiplier
+            double stopDistance = atr * atrMultiplier;
+            double stopDistancePercent = stopDistance / price;
+
+            // Fixed risk amount (e.g., 1% of balance = $100 on $10k account)
+            double riskAmount = balance * riskPercent;
+
+            // Position size to risk exactly riskAmount
+            double positionSize = riskAmount / stopDistancePercent;
+
+            // Apply caps
+            double maxPosition = Config.getDouble("risk.max_position_size", 1000.0);
+            positionSize = Math.min(positionSize, maxPosition);
+            positionSize = Math.min(positionSize, balance * 0.95); // Max 95% of balance
+
+            logger.info("📊 ATR Sizing for {}: ATR=${:.2f} ({:.2f}%), Stop={:.2f}%, Risk=${:.2f}, Size=${:.2f}",
+                    symbol, atr, (atr / price) * 100, stopDistancePercent * 100, riskAmount, positionSize);
+
+            return positionSize;
+
+        } catch (Exception e) {
+            logger.error("Error in ATR position sizing for {}", symbol, e);
+            return balance * 0.25; // Fallback
         }
     }
 
