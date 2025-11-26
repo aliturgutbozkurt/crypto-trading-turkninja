@@ -62,17 +62,18 @@ function updateDashboard(data) {
         document.getElementById('strategyStatus').className = 'stat-value ' + (acc.strategyStatus === 'Active' ? 'active' : 'inactive');
     }
 
-    // Update Positions Table
-    const tbody = document.getElementById('positionsBody');
-    const positions = data.positions || [];
+    // Update Positions Table (Only if positions data is provided)
+    if (data.positions) {
+        const tbody = document.getElementById('positionsBody');
+        const positions = data.positions;
 
-    if (positions.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="8" class="no-data">No active positions. Strategy is scanning...</td></tr>';
-    } else {
-        // Simple full redraw for now (can be optimized later if needed)
-        let html = '';
-        positions.forEach(pos => {
-            html += `
+        if (positions.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="9" class="no-data">No active positions. Strategy is scanning...</td></tr>';
+        } else {
+            // Simple full redraw for now (can be optimized later if needed)
+            let html = '';
+            positions.forEach(pos => {
+                html += `
                 <tr>
                     <td class="symbol">${pos.symbol}</td>
                     <td class="side ${pos.side.toLowerCase()}">${pos.side}</td>
@@ -87,8 +88,9 @@ function updateDashboard(data) {
                     </td>
                 </tr>
             `;
-        });
-        tbody.innerHTML = html;
+            });
+            tbody.innerHTML = html;
+        }
     }
 
     // Flash update indicator
@@ -129,7 +131,7 @@ async function loadAccount() {
     try {
         const response = await fetch('/api/account');
         const data = await response.json();
-        // Initial render handled by WebSocket update usually, but good for first paint
+        updateDashboard({ account: data });
     } catch (error) {
         console.error('Error loading account:', error);
     }
@@ -140,7 +142,7 @@ async function loadPositions() {
     try {
         const response = await fetch('/api/positions');
         const positions = await response.json();
-        // Initial render handled by WebSocket update
+        updateDashboard({ positions: positions });
     } catch (error) {
         console.error('Error loading positions:', error);
     }
