@@ -29,13 +29,22 @@ public class RSIMomentumFilter implements StrategyCriteria {
     // Removed BarSeries field
 
     public RSIMomentumFilter(AdaptiveParameterService adaptiveParamService) {
-        this.baseRsiLongMin = Double.parseDouble(Config.get("strategy.rsi.long.min", "50"));
-        this.baseRsiLongMax = Double.parseDouble(Config.get("strategy.rsi.long.max", "70"));
-        this.baseRsiShortMin = Double.parseDouble(Config.get("strategy.rsi.short.min", "30"));
-        this.baseRsiShortMax = Double.parseDouble(Config.get("strategy.rsi.short.max", "50"));
-        this.adaptiveParamService = adaptiveParamService;
+        this(adaptiveParamService,
+                Double.parseDouble(Config.get("strategy.rsi.long.min", "50")),
+                Double.parseDouble(Config.get("strategy.rsi.long.max", "70")),
+                Double.parseDouble(Config.get("strategy.rsi.short.min", "30")),
+                Double.parseDouble(Config.get("strategy.rsi.short.max", "50")));
+    }
 
-        logger.debug("✅ RSI Momentum Filter initialized: LONG=[{}-{}], SHORT=[{}-{}], Adaptive={}",
+    public RSIMomentumFilter(AdaptiveParameterService adaptiveParamService,
+            double longMin, double longMax, double shortMin, double shortMax) {
+        this.adaptiveParamService = adaptiveParamService;
+        this.baseRsiLongMin = longMin;
+        this.baseRsiLongMax = longMax;
+        this.baseRsiShortMin = shortMin;
+        this.baseRsiShortMax = shortMax;
+
+        logger.info("✅ RSI Momentum Filter initialized: LONG=[{}-{}], SHORT=[{}-{}], Adaptive={}",
                 baseRsiLongMin, baseRsiLongMax, baseRsiShortMin, baseRsiShortMax,
                 adaptiveParamService != null && adaptiveParamService.isEnabled());
     }

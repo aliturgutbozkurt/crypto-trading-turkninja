@@ -1,8 +1,16 @@
 package com.turkninja.engine.optimizer;
 
 import com.turkninja.engine.BacktestEngine;
+import com.turkninja.engine.IndicatorService;
+import com.turkninja.engine.OrderBookService;
+import com.turkninja.infra.FuturesBinanceService;
+import com.turkninja.infra.FuturesWebSocketService;
+import com.turkninja.infra.TelegramNotifier;
 import com.turkninja.model.BacktestReport;
-import com.turkninja.model.optimizer.*;
+import com.turkninja.model.optimizer.OptimizationResult;
+import com.turkninja.model.optimizer.ParameterPerformance;
+import com.turkninja.model.optimizer.ParameterSet;
+import com.turkninja.model.optimizer.ParameterSpace;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -21,170 +29,187 @@ import java.util.concurrent.atomic.AtomicReference;
  */
 public class GridSearchOptimizer implements ParameterOptimizer {
 
-    private static final Logger logger = LoggerFactory.getLogger(GridSearchOptimizer.class);
+        private static final Logger logger = LoggerFactory.getLogger(GridSearchOptimizer.class);
 
-    private final BacktestEngine backtestEngine;
-    private final boolean enableEarlyStopping;
-    private final int earlyStoppingThreshold;
+        private final IndicatorService indicatorService;
+        private final FuturesWebSocketService webSocketService;
+        private final FuturesBinanceService realBinanceService;
+        private final TelegramNotifier telegramNotifier;
+        private final OrderBookService orderBookService;
+        private final boolean enableEarlyStopping;
+        private final int earlyStoppingThreshold;
 
-    public GridSearchOptimizer(BacktestEngine backtestEngine) {
-        this(backtestEngine, true, 100);
-    }
-
-    public GridSearchOptimizer(BacktestEngine backtestEngine,
-            boolean enableEarlyStopping,
-            int earlyStoppingThreshold) {
-        this.backtestEngine = backtestEngine;
-        this.enableEarlyStopping = enableEarlyStopping;
-        this.earlyStoppingThreshold = earlyStoppingThreshold;
-    }
-
-    @Override
-    public OptimizationResult optimize(String symbol,
-            String startDate,
-            String endDate,
-            ParameterSpace parameterSpace) {
-
-        logger.info("🔍 Starting Grid Search Optimization for {}", symbol);
-        logger.info("Parameter Space: {} combinations", parameterSpace.getTotalCombinations());
-
-        OptimizationResult result = new OptimizationResult(symbol, "grid_search");
-
-        // Get all parameter combinations
-        List<ParameterSet> allCombinations = parameterSpace.getAllCombinations();
-
-        if (allCombinations.isEmpty()) {
-            logger.warn("No parameter combinations to test!");
-            result.complete();
-            return result;
+        public GridSearchOptimizer(IndicatorService indicatorService,
+                        FuturesWebSocketService webSocketService,
+                        FuturesBinanceService realBinanceService,
+                        TelegramNotifier telegramNotifier,
+                        OrderBookService orderBookService) {
+                this(indicatorService, webSocketService, realBinanceService, telegramNotifier, orderBookService, true,
+                                100);
         }
 
-        // Progress tracking
-        AtomicInteger completed = new AtomicInteger(0);
-        AtomicInteger badResults = new AtomicInteger(0);
-        int totalCombos = allCombinations.size();
+        public GridSearchOptimizer(IndicatorService indicatorService,
+                        FuturesWebSocketService webSocketService,
+                        FuturesBinanceService realBinanceService,
+                        TelegramNotifier telegramNotifier,
+                        OrderBookService orderBookService,
+                        boolean enableEarlyStopping,
+                        int earlyStoppingThreshold) {
+                this.indicatorService = indicatorService;
+                this.webSocketService = webSocketService;
+                this.realBinanceService = realBinanceService;
+                this.telegramNotifier = telegramNotifier;
+                this.orderBookService = orderBookService;
+                this.enableEarlyStopping = enableEarlyStopping;
+                this.earlyStoppingThreshold = earlyStoppingThreshold;
+        }
 
-        // Track best result with AtomicReference (for lambda)
-        AtomicReference<ParameterPerformance> bestPerformance = new AtomicReference<>(null);
+        @Override
+        public OptimizationResult optimize(String symbol, String startDate, String endDate,
+                        ParameterSpace parameterSpace) {
+                logger.info("🔍 Starting Grid Search Optimization for {}", symbol);
+                logger.info("Parameter Space: {} combinations", parameterSpace.getTotalCombinations());
 
-        // Use Virtual Thread executor for parallel backtests
-        try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
+                // Generate all parameter combinations
+                List<ParameterSet> parameterSets = parameterSpace.getAllCombinations();
+                logger.info("Generated {} parameter sets", parameterSets.size());
 
-            // Submit all backtest tasks
-            List<CompletableFuture<ParameterPerformance>> futures = new ArrayList<>();
+                // Track best result
+                AtomicReference<ParameterPerformance> bestResult = new AtomicReference<>(null);
+                AtomicInteger completed = new AtomicInteger(0);
 
-            for (ParameterSet params : allCombinations) {
-                CompletableFuture<ParameterPerformance> future = CompletableFuture.supplyAsync(() -> {
-                    try {
-                        // Run backtest with these parameters
-                        ParameterPerformance performance = runBacktest(symbol, startDate, endDate, params);
+                // Create result object
+                OptimizationResult result = new OptimizationResult(symbol, "grid_search");
 
-                        // Update progress
-                        int done = completed.incrementAndGet();
-                        if (done % 10 == 0 || done == totalCombos) {
-                            double progress = (done * 100.0) / totalCombos;
-                            ParameterPerformance currentBest = bestPerformance.get();
-                            logger.info("Progress: {}/{} ({:.1f}%) - Best Sharpe: {:.2f}",
-                                    done, totalCombos, progress,
-                                    currentBest != null ? currentBest.getSharpeRatio() : 0.0);
+                // Run backtests using Virtual Threads (parallel)
+                try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
+                        List<CompletableFuture<ParameterPerformance>> futures = new ArrayList<>();
+
+                        for (ParameterSet params : parameterSets) {
+                                CompletableFuture<ParameterPerformance> future = CompletableFuture.supplyAsync(() -> {
+                                        try {
+                                                ParameterPerformance perf = runBacktest(symbol, startDate, endDate,
+                                                                params);
+
+                                                int count = completed.incrementAndGet();
+                                                if (count % 10 == 0) {
+                                                        logger.info("Progress: {}/{} backtests completed", count,
+                                                                        parameterSets.size());
+                                                }
+
+                                                // Update best result
+                                                synchronized (bestResult) {
+                                                        if (bestResult.get() == null
+                                                                        || perf.getSharpeRatio() > bestResult.get()
+                                                                                        .getSharpeRatio()) {
+                                                                bestResult.set(perf);
+                                                                logger.info("🎯 New best Sharpe: {:.3f} with params: {}",
+                                                                                perf.getSharpeRatio(), params);
+                                                        }
+                                                }
+
+                                                return perf;
+                                        } catch (Exception e) {
+                                                logger.error("Backtest failed for params: {}", params, e);
+                                                return new ParameterPerformance(params, 0, 0, 0, 0, 0, 0);
+                                        }
+                                }, executor);
+
+                                futures.add(future);
                         }
 
-                        // Track bad results for early stopping
-                        if (performance.getSharpeRatio() < 0.5) {
-                            badResults.incrementAndGet();
+                        // Wait for all to complete
+                        CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
+
+                        // Collect all results
+                        for (CompletableFuture<ParameterPerformance> future : futures) {
+                                result.addResult(future.join());
                         }
 
-                        return performance;
+                        // Set best result
+                        ParameterPerformance best = bestResult.get();
+                        result.setBestResult(best.getParameters(), best.getSharpeRatio(),
+                                        best.getWinRate(), best.getMaxDrawdown(),
+                                        best.getNetProfit(), best.getProfitFactor());
 
-                    } catch (Exception e) {
-                        logger.error("Backtest failed for params: {}", params, e);
-                        return null;
-                    }
-                }, executor);
+                        result.complete();
 
-                futures.add(future);
+                        logger.info("✅ Optimization complete. Best Sharpe Ratio: {:.3f}", best.getSharpeRatio());
 
-                // Early stopping check
-                if (enableEarlyStopping && badResults.get() > earlyStoppingThreshold) {
-                    logger.warn("⚠️ Early stopping triggered: {} bad results", badResults.get());
-                    break;
+                        return result;
+
+                } catch (Exception e) {
+                        logger.error("Optimization failed for {}", symbol, e);
+                        throw new RuntimeException("Optimization failed", e);
                 }
-            }
+        }
 
-            // Wait for all to complete and find best
-            for (CompletableFuture<ParameterPerformance> future : futures) {
-                try {
-                    ParameterPerformance performance = future.get();
-                    if (performance != null) {
-                        result.addResult(performance);
+        /**
+         * Run a single backtest with given parameters
+         */
+        private ParameterPerformance runBacktest(String symbol,
+                        String startDate,
+                        String endDate,
+                        ParameterSet parameters) {
 
-                        // Track best
-                        ParameterPerformance currentBest = bestPerformance.get();
-                        if (currentBest == null ||
-                                performance.getFitness() > currentBest.getFitness()) {
-                            bestPerformance.set(performance);
-                        }
-                    }
-                } catch (InterruptedException | ExecutionException e) {
-                    logger.error("Error getting backtest result", e);
+                // 1. Create fresh Mock Binance Service
+                com.turkninja.infra.MockFuturesBinanceService mockBinanceService = new com.turkninja.infra.MockFuturesBinanceService(
+                                1000.0, // Initial balance
+                                0.001, // Fee rate
+                                0.001 // Slippage
+                );
+
+                // 2. Initialize RiskManager and PositionTracker (Circular Dependency)
+                com.turkninja.engine.RiskManager riskManager = new com.turkninja.engine.RiskManager(
+                                null, // PositionTracker set later
+                                mockBinanceService,
+                                orderBookService,
+                                new com.turkninja.engine.CorrelationService(mockBinanceService));
+
+                com.turkninja.engine.PositionTracker positionTracker = new com.turkninja.engine.PositionTracker(
+                                null, // TradeRepository (mocked as null)
+                                riskManager);
+
+                riskManager.setPositionTracker(positionTracker);
+
+                // 3. Create StrategyEngine with parameters
+                com.turkninja.engine.StrategyEngine strategyEngine = new com.turkninja.engine.StrategyEngine(
+                                webSocketService,
+                                mockBinanceService,
+                                indicatorService,
+                                riskManager,
+                                positionTracker,
+                                orderBookService,
+                                telegramNotifier,
+                                parameters // Pass the parameters!
+                );
+
+                // 4. Create BacktestEngine
+                BacktestEngine backtestEngine = new BacktestEngine(
+                                strategyEngine,
+                                mockBinanceService,
+                                realBinanceService,
+                                indicatorService);
+
+                // 5. Run Backtest
+                BacktestReport report = backtestEngine.runBacktest(symbol, startDate, endDate, "5m");
+
+                if (report == null) {
+                        return new ParameterPerformance(parameters, 0, 0, 0, 0, 0, 0);
                 }
-            }
 
-        } catch (Exception e) {
-            logger.error("Grid Search failed", e);
+                return new ParameterPerformance(
+                                parameters,
+                                report.sharpeRatio,
+                                report.winRate / 100.0, // Convert to decimal
+                                report.maxDrawdownPercent / 100.0,
+                                report.getNetProfitPercent() / 100.0,
+                                report.profitFactor,
+                                report.totalTrades);
         }
 
-        // Set best result
-        ParameterPerformance finalBest = bestPerformance.get();
-        if (finalBest != null) {
-            result.setBestResult(
-                    finalBest.getParameters(),
-                    finalBest.getSharpeRatio(),
-                    finalBest.getWinRate(),
-                    finalBest.getMaxDrawdown(),
-                    finalBest.getNetProfit(),
-                    finalBest.getProfitFactor());
-
-            logger.info("✅ Grid Search Complete!");
-            logger.info("Best Sharpe Ratio: {:.2f}", finalBest.getSharpeRatio());
-            logger.info("Best Parameters: {}", finalBest.getParameters());
-        } else {
-            logger.warn("No valid results found!");
+        @Override
+        public String getName() {
+                return "Grid Search";
         }
-
-        result.complete();
-        return result;
-    }
-
-    /**
-     * Run a single backtest with given parameters
-     */
-    private ParameterPerformance runBacktest(String symbol,
-            String startDate,
-            String endDate,
-            ParameterSet parameters) {
-
-        // TODO: Apply parameters to strategy before backtest
-        // For now, run backtest with default parameters
-
-        BacktestReport report = backtestEngine.runBacktest(symbol, startDate, endDate, "5m");
-
-        if (report == null) {
-            return new ParameterPerformance(parameters, 0, 0, 0, 0, 0, 0);
-        }
-
-        return new ParameterPerformance(
-                parameters,
-                report.sharpeRatio,
-                report.winRate / 100.0, // Convert to decimal
-                report.maxDrawdownPercent / 100.0,
-                report.getNetProfitPercent() / 100.0,
-                report.profitFactor,
-                report.totalTrades);
-    }
-
-    @Override
-    public String getName() {
-        return "Grid Search";
-    }
 }

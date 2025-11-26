@@ -4,6 +4,7 @@ import com.turkninja.engine.criteria.*;
 import com.turkninja.infra.FuturesBinanceService;
 import com.turkninja.infra.FuturesWebSocketService;
 import com.turkninja.infra.TelegramNotifier;
+import com.turkninja.model.optimizer.ParameterSet;
 import com.turkninja.web.service.WebSocketPushService;
 import com.turkninja.web.dto.SignalDTO;
 import com.turkninja.config.Config;
@@ -64,42 +65,87 @@ public class StrategyEngine {
     // Strategy Filters (Phase 2 - Chain of Responsibility)
     private final List<StrategyCriteria> strategyFilters;
 
-    public StrategyEngine(FuturesWebSocketService webSocketService, FuturesBinanceService futuresService,
-            IndicatorService indicatorService, RiskManager riskManager, PositionTracker positionTracker,
-            OrderBookService orderBookService, TelegramNotifier telegram) {
-        this.futuresService = futuresService;
+    public StrategyEngine(FuturesWebSocketService webSocketService,
+            FuturesBinanceService binanceService,
+            IndicatorService indicatorService,
+            RiskManager riskManager,
+            PositionTracker positionTracker,
+            OrderBookService orderBookService,
+            TelegramNotifier telegramNotifier) {
+        this(webSocketService, binanceService, indicatorService, riskManager, positionTracker, orderBookService,
+                telegramNotifier, new ParameterSet());
+    }
+
+    public StrategyEngine(FuturesWebSocketService webSocketService,
+            FuturesBinanceService binanceService,
+            IndicatorService indicatorService,
+            RiskManager riskManager,
+            PositionTracker positionTracker,
+            OrderBookService orderBookService,
+            TelegramNotifier telegramNotifier,
+            ParameterSet parameters) {
         this.webSocketService = webSocketService;
+        this.futuresService = binanceService; // Renamed from binanceService to futuresService to match field
         this.indicatorService = indicatorService;
         this.riskManager = riskManager;
         this.positionTracker = positionTracker;
         this.orderBookService = orderBookService;
+        this.telegram = telegramNotifier; // Renamed from telegramNotifier to telegram to match field
 
-        // Initialize Multi-Timeframe Analysis (Phase 2)
-        this.multiTimeframeService = new MultiTimeframeService(webSocketService, indicatorService);
-
-        // Initialize Adaptive Parameters (Phase 1.1)
+        this.multiTimeframeService = new MultiTimeframeService(webSocketService, indicatorService); // Kept
+                                                                                                    // webSocketService
+                                                                                                    // as per original
         this.adaptiveParamService = new AdaptiveParameterService(indicatorService);
-
-        // Initialize Kelly Criterion Position Sizer (Phase 1.1)
         this.kellyPositionSizer = new KellyPositionSizer();
+
+        // Initialize filters with parameters
+        this.strategyFilters = new ArrayList<>();
+
+        // ADX Filter
+        this.strategyFilters.add(new ADXTrendStrengthFilter(
+                (int) parameters.get("strategy.adx.period",
+                        Double.parseDouble(Config.get("strategy.adx.period", "14"))),
+                parameters.get("strategy.adx.min.strength",
+                        Double.parseDouble(Config.get("strategy.adx.min.strength", "20")))));
+
+        // EMA Slope Filter
+        this.strategyFilters.add(new EMASlopeFilter(indicatorService,
+                (int) parameters.get("strategy.ema.slope.period",
+                        Double.parseDouble(Config.get("strategy.ema.slope.period", "50"))),
+                (int) parameters.get("strategy.ema.slope.lookback",
+                        Double.parseDouble(Config.get("strategy.ema.slope.lookback", "10"))),
+                parameters.get("strategy.ema.slope.min.percent",
+                        Double.parseDouble(Config.get("strategy.ema.slope.min.percent", "0.05")))));
+
+        // EMA Alignment Filter
+        this.strategyFilters.add(new EMAAlignmentFilter(
+                parameters.get("strategy.ema.buffer.percent",
+                        Double.parseDouble(Config.get("strategy.ema.buffer.percent", "0.007")))));
+
+        // RSI Momentum Filter
+        this.strategyFilters.add(new RSIMomentumFilter(adaptiveParamService,
+                parameters.get("strategy.rsi.long.min", Double.parseDouble(Config.get("strategy.rsi.long.min", "50"))),
+                parameters.get("strategy.rsi.long.max", Double.parseDouble(Config.get("strategy.rsi.long.max", "70"))),
+                parameters.get("strategy.rsi.short.min",
+                        Double.parseDouble(Config.get("strategy.rsi.short.min", "30"))),
+                parameters.get("strategy.rsi.short.max",
+                        Double.parseDouble(Config.get("strategy.rsi.short.max", "50")))));
+
+        // MACD Confirmation Filter
+        this.strategyFilters.add(new MACDConfirmationFilter(
+                parameters.get("strategy.macd.signal.tolerance",
+                        Double.parseDouble(Config.get("strategy.macd.signal.tolerance", "0.00001")))));
+
+        // Volume Filter (No params yet, use default)
+        this.strategyFilters.add(new VolumeConfirmationFilter(indicatorService)); // Added indicatorService as per
+                                                                                  // original
+
+        logger.info("✅ Strategy Engine initialized with {} filters", strategyFilters.size());
         logger.info("✅ Kelly Position Sizer initialized: enabled={}, hasSufficientHistory={}",
                 kellyPositionSizer.isEnabled(), kellyPositionSizer.hasSufficientHistory());
 
         // Connect Kelly to PositionTracker for trade recording
         positionTracker.setKellyPositionSizer(kellyPositionSizer);
-
-        this.telegram = telegram;
-
-        // Initialize Strategy Filters (Phase 2)
-        this.strategyFilters = new ArrayList<>();
-        this.strategyFilters.add(new ADXTrendStrengthFilter());
-        this.strategyFilters.add(new EMASlopeFilter(indicatorService));
-        this.strategyFilters.add(new EMAAlignmentFilter());
-        this.strategyFilters.add(new RSIMomentumFilter(adaptiveParamService));
-        this.strategyFilters.add(new MACDConfirmationFilter());
-        this.strategyFilters.add(new VolumeConfirmationFilter(indicatorService));
-
-        logger.info("✅ Strategy Filters initialized: {}", strategyFilters.size());
 
         // Initialize async order executor with Virtual Threads (Phase 1.2)
         this.orderExecutor = Executors.newVirtualThreadPerTaskExecutor();
@@ -404,7 +450,7 @@ public class StrategyEngine {
                 }
 
                 // Order Book Confirmation (Imbalance + Walls)
-                else if (!orderBookService.confirmBuySignal(symbol, currentPrice)) {
+                else if (orderBookService != null && !orderBookService.confirmBuySignal(symbol, currentPrice)) {
                     logger.info("⏸️ {} LONG signal filtered by Order Book (Imbalance/Walls)", symbol);
                     longPassed = false;
                 }
@@ -460,7 +506,7 @@ public class StrategyEngine {
                 }
 
                 // Order Book Confirmation (Imbalance + Walls)
-                else if (!orderBookService.confirmSellSignal(symbol, currentPrice)) {
+                else if (orderBookService != null && !orderBookService.confirmSellSignal(symbol, currentPrice)) {
                     logger.info("⏸️ {} SHORT signal filtered by Order Book (Imbalance/Walls)", symbol);
                     shortPassed = false;
                 }
@@ -560,7 +606,7 @@ public class StrategyEngine {
             }
 
             // 4. Check Order Book slippage
-            if (!orderBookService.isSlippageAcceptable(symbol, side, positionSize, price)) {
+            if (orderBookService != null && !orderBookService.isSlippageAcceptable(symbol, side, positionSize, price)) {
                 logger.warn("⚠️ {} Order Book slippage too high - trade blocked", symbol);
                 pushSignal(symbol, side, "Blocked: High Slippage (>0.5%)", price, false, "BLOCKED_SLIPPAGE");
                 return;

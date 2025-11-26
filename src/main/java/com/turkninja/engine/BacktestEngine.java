@@ -94,8 +94,11 @@ public class BacktestEngine {
             report.endTime = history.get(history.size() - 1).getEndTime();
         }
 
-        // Build BarSeries
-        BarSeries series = new BaseBarSeriesBuilder().withName(symbol).build();
+        // Build BarSeries with DecimalNum
+        BarSeries series = new BaseBarSeriesBuilder()
+                .withName(symbol)
+                .withNumTypeOf(DecimalNum.class)
+                .build();
 
         double peak = initialBalance;
 
@@ -171,17 +174,39 @@ public class BacktestEngine {
      */
     private List<Bar> loadHistoricalData(String symbol, String startDate, String endDate, String interval) {
         List<Bar> bars = new ArrayList<>();
+        String cacheDir = "backtest_data";
+        String fileName = String.format("%s/%s_%s_%s_%s.json", cacheDir, symbol, interval, startDate, endDate);
 
         try {
-            logger.info("📥 Loading historical data: {} {} from {} to {}",
-                    symbol, interval, startDate, endDate);
+            // Ensure cache directory exists
+            java.nio.file.Files.createDirectories(java.nio.file.Paths.get(cacheDir));
 
-            // Binance allows max 1500 candles per request
-            // For backtest, we'll load in chunks
-            int limit = 1500;
+            java.io.File cacheFile = new java.io.File(fileName);
+            String klineData;
 
-            // Fetch klines (Binance returns most recent if no date params)
-            String klineData = realBinanceService.getKlines(symbol, interval, limit);
+            if (cacheFile.exists()) {
+                logger.info("📂 Loading cached data for {} from {}", symbol, fileName);
+                klineData = new String(java.nio.file.Files.readAllBytes(cacheFile.toPath()));
+            } else {
+                logger.info("📥 Downloading historical data: {} {} from {} to {}",
+                        symbol, interval, startDate, endDate);
+
+                // Binance allows max 1500 candles per request
+                int limit = 1500;
+
+                // Fetch klines
+                klineData = realBinanceService.getKlines(symbol, interval, limit);
+
+                if (klineData != null && !klineData.isEmpty() && !klineData.equals("[]")) {
+                    // Save to cache
+                    try {
+                        java.nio.file.Files.write(cacheFile.toPath(), klineData.getBytes());
+                        logger.info("💾 Saved data to cache: {}", fileName);
+                    } catch (Exception e) {
+                        logger.warn("Failed to save cache file", e);
+                    }
+                }
+            }
 
             if (klineData == null || klineData.isEmpty()) {
                 logger.warn("⚠️ No data received for {}", symbol);
@@ -196,9 +221,13 @@ public class BacktestEngine {
                 return bars;
             }
 
-            long intervalMs = getIntervalMillis(interval);
+            // Create BarSeries
+            BarSeries series = new BaseBarSeriesBuilder()
+                    .withName(symbol)
+                    .withNumTypeOf(DecimalNum.class)
+                    .build();
 
-            // Convert to Bars
+            // Convert to Bars (use series.addBar() for compatibility)
             for (int i = 0; i < klines.length(); i++) {
                 JSONArray kline = klines.getJSONArray(i);
 
@@ -213,16 +242,13 @@ public class BacktestEngine {
                 ZonedDateTime endTimestamp = ZonedDateTime.ofInstant(
                         Instant.ofEpochMilli(closeTime), ZoneId.of("UTC"));
 
-                Bar bar = new org.ta4j.core.BaseBar(
-                        Duration.ofMillis(intervalMs),
-                        endTimestamp,
-                        open,
-                        high,
-                        low,
-                        close,
-                        volume);
+                // Add bar directly to series (compatibility with ta4j)
+                series.addBar(endTimestamp, open, high, low, close, volume);
+            }
 
-                bars.add(bar);
+            // Convert series to list of bars
+            for (int i = 0; i < series.getBarCount(); i++) {
+                bars.add(series.getBar(i));
             }
 
             logger.info("✅ Loaded {} candles for {}", bars.size(), symbol);

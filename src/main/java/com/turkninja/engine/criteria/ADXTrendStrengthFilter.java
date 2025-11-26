@@ -20,14 +20,22 @@ public class ADXTrendStrengthFilter implements StrategyCriteria {
     private static final Logger logger = LoggerFactory.getLogger(ADXTrendStrengthFilter.class);
 
     private final boolean enabled;
+    private final int period;
     private final double minStrength;
 
     public ADXTrendStrengthFilter() {
+        this(Integer.parseInt(Config.get("strategy.adx.period", "14")),
+                Double.parseDouble(Config.get("strategy.adx.min.strength", "20")));
+    }
+
+    public ADXTrendStrengthFilter(int period, double minStrength) {
         this.enabled = Boolean.parseBoolean(Config.get("strategy.adx.enabled", "true"));
-        this.minStrength = Double.parseDouble(Config.get("strategy.adx.min.strength", "25"));
+        this.period = period;
+        this.minStrength = minStrength;
 
         if (enabled) {
-            logger.info("✅ ADX Filter initialized: minStrength={}", minStrength);
+            logger.debug("✅ ADX Trend Strength Filter initialized: period={}, minStrength={}",
+                    period, minStrength);
         }
     }
 

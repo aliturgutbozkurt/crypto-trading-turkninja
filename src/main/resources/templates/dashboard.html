@@ -177,36 +177,6 @@
             </div>
         </div>
 
-        <!-- TradingView Chart -->
-        <div class="chart-container">
-            <div class="chart-header">
-                <div class="chart-title">📈 Live Chart - <span id="currentSymbol">BTCUSDT</span></div>
-                <div class="symbol-selector">
-                    <button class="symbol-btn active" onclick="changeSymbol('BTCUSDT')">BTC</button>
-                    <button class="symbol-btn" onclick="changeSymbol('ETHUSDT')">ETH</button>
-                    <button class="symbol-btn" onclick="changeSymbol('SOLUSDT')">SOL</button>
-                    <button class="symbol-btn" onclick="changeSymbol('DOGEUSDT')">DOGE</button>
-                    <button class="symbol-btn" onclick="changeSymbol('XRPUSDT')">XRP</button>
-                    <button class="symbol-btn" onclick="changeSymbol('AVAXUSDT')">AVAX</button>
-                    <button class="symbol-btn" onclick="changeSymbol('LINKUSDT')">LINK</button>
-                </div>
-            </div>
-            <div id="chartDiv"></div>
-            <div class="trade-legends">
-                <div class="legend-item">
-                    <div class="legend-marker buy"></div>
-                    <span>🟢 LONG Entry</span>
-                </div>
-                <div class="legend-item">
-                    <div class="legend-marker sell"></div>
-                    <span>🔴 SHORT Entry or Exit</span>
-                </div>
-                <div class="legend-item">
-                    <span>💰 Trailing Stop aktivasyon seviyesi gösterilir</span>
-                </div>
-            </div>
-        </div>
-
         <!-- Positions Table -->
         <div class="positions-section">
             <h3>📊 Active Positions</h3>
@@ -237,6 +207,36 @@
         <div class="signals-section">
             <h3>📡 Trading Signals (Real-Time)</h3>
             <div id="signalsList"></div>
+        </div>
+
+        <!-- TradingView Chart -->
+        <div class="chart-container">
+            <div class="chart-header">
+                <div class="chart-title">📈 Live Chart - <span id="currentSymbol">BTCUSDT</span></div>
+                <div class="symbol-selector">
+                    <button class="symbol-btn active" onclick="changeSymbol('BTCUSDT')">BTC</button>
+                    <button class="symbol-btn" onclick="changeSymbol('ETHUSDT')">ETH</button>
+                    <button class="symbol-btn" onclick="changeSymbol('SOLUSDT')">SOL</button>
+                    <button class="symbol-btn" onclick="changeSymbol('DOGEUSDT')">DOGE</button>
+                    <button class="symbol-btn" onclick="changeSymbol('XRPUSDT')">XRP</button>
+                    <button class="symbol-btn" onclick="changeSymbol('AVAXUSDT')">AVAX</button>
+                    <button class="symbol-btn" onclick="changeSymbol('LINKUSDT')">LINK</button>
+                </div>
+            </div>
+            <div id="chartDiv"></div>
+            <div class="trade-legends">
+                <div class="legend-item">
+                    <div class="legend-marker buy"></div>
+                    <span>🟢 LONG Entry</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-marker sell"></div>
+                    <span>🔴 SHORT Entry or Exit</span>
+                </div>
+                <div class="legend-item">
+                    <span>💰 Trailing Stop aktivasyon seviyesi gösterilir</span>
+                </div>
+            </div>
         </div>
 
         <footer>

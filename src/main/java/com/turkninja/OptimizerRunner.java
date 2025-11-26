@@ -3,6 +3,7 @@ package com.turkninja;
 import com.turkninja.config.Config;
 import com.turkninja.engine.BacktestEngine;
 import com.turkninja.engine.IndicatorService;
+import com.turkninja.engine.OrderBookService;
 import com.turkninja.engine.StrategyEngine;
 import com.turkninja.engine.optimizer.GridSearchOptimizer;
 import com.turkninja.infra.FuturesBinanceService;
@@ -64,8 +65,8 @@ public class OptimizerRunner {
         logger.info("");
 
         try {
-            // Initialize services
-            FuturesBinanceService futuresService = new FuturesBinanceService();
+            // Initialize services - SKIP initialization to prevent IP ban
+            FuturesBinanceService futuresService = new FuturesBinanceService(true);
             IndicatorService indicatorService = new IndicatorService();
 
             // Define parameter space (same for all symbols initially)
@@ -97,7 +98,13 @@ public class OptimizerRunner {
                 OptimizationResult result;
 
                 if ("grid".equalsIgnoreCase(method)) {
-                    GridSearchOptimizer optimizer = new GridSearchOptimizer(backtestEngine);
+                    // Initialize Optimizer
+                    GridSearchOptimizer optimizer = new GridSearchOptimizer(
+                            indicatorService,
+                            null, // webSocketService (not available in this context)
+                            futuresService, // binanceService (using futuresService as the real Binance service)
+                            null, // telegramNotifier (not available in this context)
+                            null); // orderBookService (not available in this context)
                     result = optimizer.optimize(symbol, startDate, endDate, parameterSpace);
                 } else {
                     logger.error("Unknown optimization method: {}. Use 'grid' or 'genetic'", method);
@@ -168,18 +175,17 @@ public class OptimizerRunner {
      */
     private static ParameterSpace createParameterSpace() {
         return new ParameterSpace()
-                // RSI parameters (smaller ranges for faster execution)
-                .addDiscrete("rsi.period", 12, 14, 16) // 3 values
-                .addDiscrete("rsi.long.min", 48, 52, 55) // 3 values
-                .addDiscrete("rsi.long.max", 68, 70, 72) // 3 values
+                // RSI parameters
+                .addDiscrete("strategy.rsi.long.min", 45, 50, 55)
+                .addDiscrete("strategy.rsi.long.max", 65, 70, 75)
+                .addDiscrete("strategy.rsi.short.min", 25, 30, 35)
+                .addDiscrete("strategy.rsi.short.max", 45, 50, 55)
 
-                // EMA parameters
-                .addDiscrete("ema.fast", 20, 25) // 2 values
-                .addDiscrete("ema.slow", 50, 55) // 2 values
+                // EMA Slope parameters
+                .addDiscrete("strategy.ema.slope.min.percent", 0.01, 0.03, 0.05)
+                .addDiscrete("strategy.ema.buffer.percent", 0.001, 0.005, 0.01)
 
                 // ADX threshold
-                .addDiscrete("adx.threshold", 22, 25, 28); // 3 values
-
-        // Total combinations: 3 × 3 × 3 × 2 × 2 × 3 = 324 per symbol
+                .addDiscrete("strategy.adx.min.strength", 15, 20, 25);
     }
 }

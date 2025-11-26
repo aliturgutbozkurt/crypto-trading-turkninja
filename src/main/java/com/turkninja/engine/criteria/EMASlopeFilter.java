@@ -30,11 +30,18 @@ public class EMASlopeFilter implements StrategyCriteria {
     // Removed BarSeries field as it's now passed in evaluate
 
     public EMASlopeFilter(IndicatorService indicatorService) {
-        this.enabled = Boolean.parseBoolean(Config.get("strategy.ema.slope.enabled", "true"));
-        this.period = Integer.parseInt(Config.get("strategy.ema.slope.period", "50"));
-        this.lookback = Integer.parseInt(Config.get("strategy.ema.slope.lookback", "10"));
-        this.minPercent = Double.parseDouble(Config.get("strategy.ema.slope.min.percent", "0.05"));
+        this(indicatorService,
+                Integer.parseInt(Config.get("strategy.ema.slope.period", "50")),
+                Integer.parseInt(Config.get("strategy.ema.slope.lookback", "10")),
+                Double.parseDouble(Config.get("strategy.ema.slope.min.percent", "0.05")));
+    }
+
+    public EMASlopeFilter(IndicatorService indicatorService, int period, int lookback, double minPercent) {
         this.indicatorService = indicatorService;
+        this.enabled = Boolean.parseBoolean(Config.get("strategy.ema.slope.enabled", "true"));
+        this.period = period;
+        this.lookback = lookback;
+        this.minPercent = minPercent;
 
         if (enabled) {
             logger.debug("✅ EMA Slope Filter initialized: period={}, lookback={}, minPercent={}%",
@@ -57,15 +64,15 @@ public class EMASlopeFilter implements StrategyCriteria {
             // LONG: Need upward momentum
             passes = slope >= minPercent;
             if (!passes) {
-                logger.info("⏸️ {} LONG filtered - EMA slope too flat ({:.3f}% < {:.3f}%)",
-                        symbol, slope, minPercent);
+                logger.info("⏸️ {} LONG filtered - EMA slope too flat ({}% < {}%)",
+                        symbol, String.format("%.3f", slope), String.format("%.3f", minPercent));
             }
         } else {
             // SHORT: Need downward momentum
             passes = slope <= -minPercent;
             if (!passes) {
-                logger.info("⏸️ {} SHORT filtered - EMA slope too flat ({:.3f}% > -{:.3f}%)",
-                        symbol, slope, minPercent);
+                logger.info("⏸️ {} SHORT filtered - EMA slope too flat ({}% > -{}%)",
+                        symbol, String.format("%.3f", slope), String.format("%.3f", minPercent));
             }
         }
 

@@ -69,10 +69,20 @@ public class MockFuturesBinanceService extends FuturesBinanceService {
         }
     }
 
+    private final double feeRate;
+    private final double slippage;
+
     public MockFuturesBinanceService(double initialBalance) {
+        this(initialBalance, 0.0004, 0.0);
+    }
+
+    public MockFuturesBinanceService(double initialBalance, double feeRate, double slippage) {
         // Don't call super() - we don't need real API keys
         this.virtualBalance = initialBalance;
-        logger.info("MockFuturesBinanceService initialized with balance: ${}", initialBalance);
+        this.feeRate = feeRate;
+        this.slippage = slippage;
+        logger.info("MockFuturesBinanceService initialized: Balance=${}, Fee={:.4f}, Slippage={:.4f}",
+                initialBalance, feeRate, slippage);
     }
 
     /**
@@ -116,7 +126,7 @@ public class MockFuturesBinanceService extends FuturesBinanceService {
 
             // Calculate position value
             double notionalValue = quantity * currentPrice;
-            double commission = notionalValue * 0.0004; // 0.04% commission
+            double commission = notionalValue * feeRate;
 
             // Update virtual balance (deduct commission)
             virtualBalance -= commission;
@@ -174,7 +184,7 @@ public class MockFuturesBinanceService extends FuturesBinanceService {
 
         // Apply exit commission
         double notionalValue = position.quantity * currentPrice;
-        double exitCommission = notionalValue * 0.0004;
+        double exitCommission = notionalValue * feeRate;
         pnl -= exitCommission;
 
         // Update balance

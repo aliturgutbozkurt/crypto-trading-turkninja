@@ -23,8 +23,12 @@ public class EMAAlignmentFilter implements StrategyCriteria {
     private final double bufferPercent;
 
     public EMAAlignmentFilter() {
-        this.bufferPercent = Double.parseDouble(Config.get("strategy.ema.buffer.percent", "0.007"));
-        logger.debug("✅ EMA Alignment Filter initialized: buffer={}%", bufferPercent * 100);
+        this(Double.parseDouble(Config.get("strategy.ema.buffer.percent", "0.007")));
+    }
+
+    public EMAAlignmentFilter(double bufferPercent) {
+        this.bufferPercent = bufferPercent;
+        logger.info("✅ EMA Alignment Filter initialized: buffer={}%", bufferPercent * 100);
     }
 
     @Override
@@ -40,24 +44,28 @@ public class EMAAlignmentFilter implements StrategyCriteria {
 
         boolean passes;
         if (isLong) {
-            // LONG: Price > EMA21 > EMA50 (with buffer)
-            boolean priceAboveEma21 = currentPrice > ema21 * (1 + bufferPercent);
-            boolean ema21AboveEma50 = ema21 > ema50 * (1 + bufferPercent);
+            // LONG: Price > EMA21 > EMA50 (with buffer allowing price slightly below EMAs)
+            // Buffer allows price to be up to X% BELOW EMA21/50
+            boolean priceAboveEma21 = currentPrice > ema21 * (1 - bufferPercent);
+            boolean ema21AboveEma50 = ema21 > ema50 * (1 - bufferPercent);
             passes = priceAboveEma21 && ema21AboveEma50;
 
             if (!passes) {
-                logger.debug("⏸️ {} LONG filtered - EMA alignment broken (Price:{}, EMA21:{}, EMA50:{})",
-                        symbol, currentPrice, ema21, ema50);
+                logger.info("⏸️ {} LONG filtered - EMA alignment broken (Price:{}, EMA21:{}, EMA50:{})",
+                        symbol, String.format("%.2f", currentPrice), String.format("%.2f", ema21),
+                        String.format("%.2f", ema50));
             }
         } else {
-            // SHORT: Price < EMA21 < EMA50 (with buffer)
-            boolean priceBelowEma21 = currentPrice < ema21 * (1 - bufferPercent);
-            boolean ema21BelowEma50 = ema21 < ema50 * (1 - bufferPercent);
+            // SHORT: Price < EMA21 < EMA50 (with buffer allowing price slightly above EMAs)
+            // Buffer allows price to be up to X% ABOVE EMA21/50
+            boolean priceBelowEma21 = currentPrice < ema21 * (1 + bufferPercent);
+            boolean ema21BelowEma50 = ema21 < ema50 * (1 + bufferPercent);
             passes = priceBelowEma21 && ema21BelowEma50;
 
             if (!passes) {
-                logger.debug("⏸️ {} SHORT filtered - EMA alignment broken (Price:{}, EMA21:{}, EMA50:{})",
-                        symbol, currentPrice, ema21, ema50);
+                logger.info("⏸️ {} SHORT filtered - EMA alignment broken (Price:{}, EMA21:{}, EMA50:{})",
+                        symbol, String.format("%.2f", currentPrice), String.format("%.2f", ema21),
+                        String.format("%.2f", ema50));
             }
         }
 

@@ -7,9 +7,8 @@ import com.turkninja.infra.repository.AccountRepository;
 import com.turkninja.infra.repository.TradeRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.boot.CommandLineRunner;
 import org.springframework.boot.SpringApplication;
-import org.springframework.boot.autoconfigure.SpringBootApplication;
-import org.springframework.context.annotation.Bean;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.Bean;
 
@@ -98,6 +97,23 @@ public class App {
             TelegramNotifier telegramNotifier) {
         return new StrategyEngine(webSocketService, futuresBinanceService, indicatorService, riskManager,
                 positionTracker, orderBookService, telegramNotifier);
+    }
+
+    @Bean
+    public CommandLineRunner startSynchronizationService(SynchronizationService syncService) {
+        return args -> {
+            syncService.start();
+            logger.info("🔄 Synchronization Service started");
+        };
+    }
+
+    @Bean
+    public CommandLineRunner startWebSocketService(FuturesWebSocketService webSocketService) {
+        return args -> {
+            // Start user data stream to populate cached account info
+            webSocketService.startUserDataStream();
+            logger.info("📡 FuturesWebSocketService user data stream started");
+        };
     }
 
     @Bean

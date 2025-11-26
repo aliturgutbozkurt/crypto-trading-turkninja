@@ -5,6 +5,8 @@ import io.github.resilience4j.retry.Retry;
 import io.github.resilience4j.retry.RetryConfig;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig;
+import io.github.resilience4j.ratelimiter.RateLimiter;
+import io.github.resilience4j.ratelimiter.RateLimiterConfig;
 import okhttp3.*;
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -36,9 +38,10 @@ public class FuturesBinanceService {
     // Avoids expensive Mac.getInstance() calls on every signature generation
     private final ThreadLocal<Mac> macThreadLocal;
 
-    // Resilience4j Retry and Circuit Breaker configs (Phase 1.3)
+    // Resilience4j Retry, Circuit Breaker, and Rate Limiter configs (Phase 1.3)
     private final Retry retry;
     private final CircuitBreaker circuitBreaker;
+    private final RateLimiter rateLimiter;
 
     // Symbols to trade with 20x leverage
     private static final String[] TRADING_SYMBOLS = {
@@ -48,6 +51,10 @@ public class FuturesBinanceService {
     };
 
     public FuturesBinanceService() {
+        this(false); // Default: Initialize settings (for live bot)
+    }
+
+    public FuturesBinanceService(boolean skipInitialization) {
         this.apiKey = Config.get(Config.BINANCE_API_KEY);
         this.secretKey = Config.get(Config.BINANCE_SECRET_KEY);
 
@@ -110,6 +117,16 @@ public class FuturesBinanceService {
 
         this.circuitBreaker = CircuitBreaker.of("binanceApi", cbConfig);
 
+        // Configure Rate Limiter: 1200 requests per minute (20 per second)
+        // Binance limit is 2400/min, so 1200 is a safe buffer
+        RateLimiterConfig rlConfig = RateLimiterConfig.custom()
+                .limitRefreshPeriod(Duration.ofSeconds(1))
+                .limitForPeriod(20) // 20 req/sec = 1200 req/min
+                .timeoutDuration(Duration.ofSeconds(5)) // Wait up to 5s for permission
+                .build();
+
+        this.rateLimiter = RateLimiter.of("binanceApi", rlConfig);
+
         // Log retry/circuit breaker events
         retry.getEventPublisher()
                 .onRetry(event -> logger.warn("🔄 API Retry {}/{}: {}",
@@ -121,11 +138,16 @@ public class FuturesBinanceService {
                         event.getStateTransition().getFromState(),
                         event.getStateTransition().getToState()));
 
-        logger.info("Binance Futures Service initialized with Retry (max: 4) and Circuit Breaker");
+        logger.info(
+                "Binance Futures Service initialized with Retry (max: 4), Circuit Breaker, and Rate Limiter (20/sec)");
 
         // Initialize leverage and margin type for all symbols (async to speed up
         // startup)
-        Thread.ofVirtual().start(this::initializeTradingSettings);
+        if (!skipInitialization) {
+            Thread.ofVirtual().start(this::initializeTradingSettings);
+        } else {
+            logger.info("⏩ Skipping trading settings initialization (Backtest Mode)");
+        }
     }
 
     private void initializeTradingSettings() {
@@ -279,23 +301,28 @@ public class FuturesBinanceService {
     }
 
     public String getKlines(String symbol, String interval, int limit) {
-        try {
-            LinkedHashMap<String, Object> parameters = new LinkedHashMap<>();
-            parameters.put("symbol", symbol);
-            parameters.put("interval", interval);
-            parameters.put("limit", limit);
+        Supplier<String> klineSupplier = () -> {
+            try {
+                LinkedHashMap<String, Object> parameters = new LinkedHashMap<>();
+                parameters.put("symbol", symbol);
+                parameters.put("interval", interval);
+                parameters.put("limit", limit);
 
-            String queryString = buildQueryString(parameters);
-            String url = FUTURES_BASE_URL + "/fapi/v1/klines?" + queryString;
+                String queryString = buildQueryString(parameters);
+                String url = FUTURES_BASE_URL + "/fapi/v1/klines?" + queryString;
 
-            Request request = new Request.Builder().url(url).build();
-            try (Response response = httpClient.newCall(request).execute()) {
-                return response.body() != null ? response.body().string() : "[]";
+                Request request = new Request.Builder().url(url).build();
+                try (Response response = httpClient.newCall(request).execute()) {
+                    return response.body() != null ? response.body().string() : "[]";
+                }
+            } catch (Exception e) {
+                logger.error("Failed to get klines for {}", symbol, e);
+                return "[]";
             }
-        } catch (Exception e) {
-            logger.error("Failed to get klines for {}", symbol, e);
-            return "[]";
-        }
+        };
+
+        // Apply RateLimiter
+        return RateLimiter.decorateSupplier(rateLimiter, klineSupplier).get();
     }
 
     public double getSymbolPriceTicker(String symbol) {
@@ -343,9 +370,10 @@ public class FuturesBinanceService {
             }
         };
 
-        // Apply Retry decorateion then Circuit Breaker
+        // Apply Retry decoration, Circuit Breaker, and Rate Limiter
         Supplier<String> decorated = Retry.decorateSupplier(retry, orderSupplier);
         decorated = CircuitBreaker.decorateSupplier(circuitBreaker, decorated);
+        decorated = RateLimiter.decorateSupplier(rateLimiter, decorated);
         return decorated.get();
     }
 

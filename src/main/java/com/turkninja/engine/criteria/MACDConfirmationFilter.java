@@ -23,8 +23,12 @@ public class MACDConfirmationFilter implements StrategyCriteria {
     private final double tolerance;
 
     public MACDConfirmationFilter() {
-        this.tolerance = Double.parseDouble(Config.get("strategy.macd.signal.tolerance", "0.00001"));
-        logger.debug("✅ MACD Confirmation Filter initialized: tolerance={}", tolerance);
+        this(Double.parseDouble(Config.get("strategy.macd.signal.tolerance", "0.00001")));
+    }
+
+    public MACDConfirmationFilter(double tolerance) {
+        this.tolerance = tolerance;
+        logger.info("✅ MACD Confirmation Filter initialized: tolerance={}", tolerance);
     }
 
     @Override
