@@ -141,6 +141,22 @@ public class IndicatorService {
             results.putAll(nwe);
         }
 
+        // ADX (Average Directional Index) - Trend Strength
+        if (series.getBarCount() >= 20) {
+            int adxPeriod = Integer.parseInt(com.turkninja.config.Config.get("strategy.adx.period", "14"));
+
+            org.ta4j.core.indicators.adx.ADXIndicator adx = new org.ta4j.core.indicators.adx.ADXIndicator(series,
+                    adxPeriod);
+            org.ta4j.core.indicators.adx.PlusDIIndicator plusDI = new org.ta4j.core.indicators.adx.PlusDIIndicator(
+                    series, adxPeriod);
+            org.ta4j.core.indicators.adx.MinusDIIndicator minusDI = new org.ta4j.core.indicators.adx.MinusDIIndicator(
+                    series, adxPeriod);
+
+            results.put("ADX", adx.getValue(series.getEndIndex()).doubleValue());
+            results.put("PLUS_DI", plusDI.getValue(series.getEndIndex()).doubleValue());
+            results.put("MINUS_DI", minusDI.getValue(series.getEndIndex()).doubleValue());
+        }
+
         // Super Trend
         if (series.getBarCount() >= 20) {
             // Read Super Trend parameters from config
@@ -157,6 +173,59 @@ public class IndicatorService {
 
     public BarSeries createBarSeries(String name) {
         return new BaseBarSeriesBuilder().withName(name).build();
+    }
+
+    /**
+     * Calculate EMA slope (momentum) over the last N candles
+     * 
+     * @param series    Bar series
+     * @param emaPeriod EMA period (e.g., 50)
+     * @param lookback  Number of candles to look back for slope calculation
+     * @return Percentage change of EMA (e.g., 0.05 = 0.05% increase)
+     */
+    public double calculateEMASlope(BarSeries series, int emaPeriod, int lookback) {
+        if (series.getBarCount() < emaPeriod + lookback) {
+            return 0.0;
+        }
+
+        ClosePriceIndicator closePrice = new ClosePriceIndicator(series);
+        EMAIndicator ema = new EMAIndicator(closePrice, emaPeriod);
+
+        int currentIndex = series.getEndIndex();
+        int pastIndex = currentIndex - lookback;
+
+        double currentEMA = ema.getValue(currentIndex).doubleValue();
+        double pastEMA = ema.getValue(pastIndex).doubleValue();
+
+        if (pastEMA == 0)
+            return 0.0;
+
+        // Return percentage change
+        return ((currentEMA - pastEMA) / pastEMA) * 100.0;
+    }
+
+    /**
+     * Check if current volume is above average
+     * 
+     * @param series     Bar series
+     * @param multiplier Minimum ratio (e.g., 1.2 = 120% of average)
+     * @param period     Period for average calculation
+     * @return true if volume confirmation passed
+     */
+    public boolean checkVolumeConfirmation(BarSeries series, double multiplier, int period) {
+        if (series.getBarCount() < period) {
+            return false;
+        }
+
+        double currentVolume = series.getLastBar().getVolume().doubleValue();
+        double avgVolume = 0.0;
+
+        for (int i = series.getEndIndex() - period + 1; i <= series.getEndIndex(); i++) {
+            avgVolume += series.getBar(i).getVolume().doubleValue();
+        }
+        avgVolume /= period;
+
+        return avgVolume > 0 && (currentVolume / avgVolume) >= multiplier;
     }
 
     public void addBar(BarSeries series, ZonedDateTime time, double open, double high, double low, double close,

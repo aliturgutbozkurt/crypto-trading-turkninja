@@ -82,12 +82,31 @@ public class StrategyEngine {
         rsiBandsMinWidth = Double.parseDouble(Config.get("strategy.rsi.bands.min_width", "10.0"));
 
         // Load Super Trend config
-        superTrendEnabled = Boolean.parseBoolean(Config.get("strategy.supertrend.enabled", "true"));
+        superTrendEnabled = Boolean.parseBoolean(Config.get("strategy.supertrend.enabled", "false"));
+
+        // Load new filters for High Win Rate Strategy
+        adxEnabled = Boolean.parseBoolean(Config.get("strategy.adx.enabled", "true"));
+        adxMinStrength = Double.parseDouble(Config.get("strategy.adx.min.strength", "25"));
+
+        emaSlopeEnabled = Boolean.parseBoolean(Config.get("strategy.ema.slope.enabled", "true"));
+        emaSlopePeriod = Integer.parseInt(Config.get("strategy.ema.slope.period", "50"));
+        emaSlopeLookback = Integer.parseInt(Config.get("strategy.ema.slope.lookback", "10"));
+        emaSlopeMinPercent = Double.parseDouble(Config.get("strategy.ema.slope.min.percent", "0.05"));
+
+        volumeFilterEnabled = Boolean.parseBoolean(Config.get("strategy.volume.filter.enabled", "true"));
+        volumeMinMultiplier = Double.parseDouble(Config.get("strategy.volume.min.multiplier", "1.2"));
+        volumePeriod = Integer.parseInt(Config.get("strategy.volume.period", "20"));
+
+        // Load new RSI ranges for high win rate (avoid reversal zones)
+        rsiLongMinNew = Double.parseDouble(Config.get("strategy.rsi.long.min", "50"));
+        rsiLongMaxNew = Double.parseDouble(Config.get("strategy.rsi.long.max", "70"));
+        rsiShortMinNew = Double.parseDouble(Config.get("strategy.rsi.short.min", "30"));
+        rsiShortMaxNew = Double.parseDouble(Config.get("strategy.rsi.short.max", "50"));
 
         logger.info(
-                "Strategy Config Loaded: RSI [{}-{}] / [{}-{}], EMA Buffer: {}%, Multi-TF: {}, NWE: {}, RSI Bands: {}",
+                "Strategy Config Loaded: RSI [{}-{}] / [{}-{}], EMA Buffer: {}%, Multi-TF: {}, ADX: {}, EMA Slope: {}, Volume: {}",
                 rsiLongMin, rsiLongMax, rsiShortMin, rsiShortMax, emaBufferPercent * 100, useMultiTimeframe,
-                nweEnabled, rsiBandsEnabled);
+                adxEnabled, emaSlopeEnabled, volumeFilterEnabled);
 
         // Batch signal selection config
         this.batchModeEnabled = Boolean.parseBoolean(Config.get("strategy.batch.enabled", "true"));
@@ -114,6 +133,23 @@ public class StrategyEngine {
 
     // Super Trend parameters
     private boolean superTrendEnabled;
+
+    // High Win Rate Strategy Filters
+    private boolean adxEnabled;
+    private double adxMinStrength;
+    private boolean emaSlopeEnabled;
+    private int emaSlopePeriod;
+    private int emaSlopeLookback;
+    private double emaSlopeMinPercent;
+    private boolean volumeFilterEnabled;
+    private double volumeMinMultiplier;
+    private int volumePeriod;
+
+    // New RSI ranges for avoiding reversal zones
+    private double rsiLongMinNew;
+    private double rsiLongMaxNew;
+    private double rsiShortMinNew;
+    private double rsiShortMaxNew;
 
     private volatile String btcTrend = "NEUTRAL"; // BULLISH, BEARISH, NEUTRAL
 
@@ -318,31 +354,69 @@ public class StrategyEngine {
                         indicators5m.getOrDefault("SUPER_TREND_DIRECTION", 0.0));
             }
 
-            // LONG Logic:
-            // 1. Trend: Price > EMA 50
-            // 2. Momentum: RSI > 50 (Bullish) AND RSI < 70 (Not Overbought)
-            // 3. Confirmation: MACD > Signal (Bullish Alignment)
+            // **HIGH WIN RATE STRATEGY - MULTI-LAYER FILTERING**
+
+            // ========== LAYER 1: ADX TREND STRENGTH (Avoid Sideways Markets) ==========
+            if (adxEnabled && indicators5m.containsKey("ADX")) {
+                double adx = indicators5m.get("ADX");
+                if (adx < adxMinStrength) {
+                    logger.info("⏸️ {} LONG filtered - ADX too low ({:.2f} < {:.2f}) - Sideways market",
+                            symbol, adx, adxMinStrength);
+                    return; // Exit immediately - no trades in sideways markets
+                }
+                logger.debug("✅ {} ADX check passed: {:.2f}", symbol, adx);
+            }
+
+            // ========== LAYER 2: EMA SLOPE (Trend Momentum) ==========
+            if (emaSlopeEnabled) {
+                double slope = indicatorService.calculateEMASlope(series5m, emaSlopePeriod, emaSlopeLookback);
+                if (slope < emaSlopeMinPercent) {
+                    logger.info("⏸️ {} LONG filtered - EMA slope too flat ({:.3f}% < {:.3f}%)",
+                            symbol, slope, emaSlopeMinPercent);
+                    return; // Not enough upward momentum
+                }
+                logger.debug("✅ {} EMA slope check passed: {:.3f}%", symbol, slope);
+            }
+
+            // ========== LAYER 3: EMA ALIGNMENT (Bullish Structure) ==========
+            double ema21_5m = indicators5m.getOrDefault("EMA_21", currentPrice);
+            boolean emaAlignment = currentPrice > ema21_5m && ema21_5m > ema50_5m;
+            if (!emaAlignment) {
+                logger.debug("⏸️ {} LONG filtered - EMA alignment broken (Price:{}, EMA21:{}, EMA50:{})",
+                        symbol, currentPrice, ema21_5m, ema50_5m);
+                return;
+            }
 
             boolean isBuySignal = false;
             String buyReason = "";
 
-            // EMA buffer: from config to avoid sideways false signals
-            double emaMultiplierUp = 1 + emaBufferPercent;
-            double emaMultiplierDown = 1 - emaBufferPercent;
-            boolean trendUp = currentPrice > ema50_5m * emaMultiplierUp;
-            boolean momentumUp = rsi_5m > rsiLongMin && rsi_5m < rsiLongMax;
+            // ========== LAYER 4: RSI MOMENTUM (Avoid Reversal Zones) ==========
+            // Use new RSI ranges: 50-70 (momentum without overbought)
+            boolean momentumUp = rsi_5m > rsiLongMinNew && rsi_5m < rsiLongMaxNew;
+
+            // ========== LAYER 5: MACD CONFIRMATION ==========
             boolean macdBullish = macd > (macdSignal + macdSignalTolerance);
 
-            // Debug: Log signal conditions every 10 candles
-            if (Math.random() < 0.1) {
-                logger.info(
-                        "🔍 {} Check: Price={}, EMA50={}, RSI={}, MACD={}/{}, TrendUp={}, MomentumUp={}, MACDBullish={}",
-                        symbol, currentPrice, ema50_5m, rsi_5m, macd, macdSignal, trendUp, momentumUp, macdBullish);
+            // ========== LAYER 6: VOLUME CONFIRMATION ==========
+            boolean volumeOk = true;
+            if (volumeFilterEnabled) {
+                volumeOk = indicatorService.checkVolumeConfirmation(series5m, volumeMinMultiplier, volumePeriod);
+                if (!volumeOk) {
+                    logger.debug("⏸️ {} LONG filtered - Volume too low", symbol);
+                    return;
+                }
             }
 
-            // Changed to AND logic: ALL 3 conditions must be met for higher quality signals
+            // Debug: Log signal conditions
+            if (Math.random() < 0.1) {
+                logger.info(
+                        "🔍 {} Check: Price={}, EMA21={}, EMA50={}, RSI={}, MACD={}/{}, MomentumUp={}, MACDBullish={}",
+                        symbol, currentPrice, ema21_5m, ema50_5m, rsi_5m, macd, macdSignal, momentumUp, macdBullish);
+            }
+
+            // **ALL conditions must be met for LONG**
             int conditionsMet = 0;
-            if (trendUp)
+            if (emaAlignment)
                 conditionsMet++;
             if (momentumUp)
                 conditionsMet++;
@@ -352,7 +426,7 @@ public class StrategyEngine {
             if (conditionsMet == 3) {
                 isBuySignal = true;
                 String conditions = String.format("Trend=%s, Momentum=%s, MACD=%s",
-                        trendUp, momentumUp, macdBullish);
+                        emaAlignment, momentumUp, macdBullish);
                 buyReason = String.format(
                         "LONG: ALL conditions met (%s) RSI=%.0f",
                         conditions, rsi_5m);
@@ -462,15 +536,60 @@ public class StrategyEngine {
             // 2. Momentum: RSI < 50 (Bearish) AND RSI > 30 (Not Oversold)
             // 3. Confirmation: MACD < Signal (Bearish Alignment)
 
+            // **SAME MULTI-LAYER FILTERING FOR SHORT**
+
+            // ========== LAYER 1: ADX TREND STRENGTH (Avoid Sideways) ==========
+            // Same ADX check - sideways market blocks both LONG and SHORT
+            if (adxEnabled && indicators5m.containsKey("ADX")) {
+                double adx = indicators5m.get("ADX");
+                if (adx < adxMinStrength) {
+                    logger.info("⏸️ {} SHORT filtered - ADX too low ({:.2f} < {:.2f}) - Sideways market",
+                            symbol, adx, adxMinStrength);
+                    return; // Exit immediately
+                }
+            }
+
+            // ========== LAYER 2: EMA SLOPE (Downtrend Momentum) ==========
+            if (emaSlopeEnabled) {
+                double slope = indicatorService.calculateEMASlope(series5m, emaSlopePeriod, emaSlopeLookback);
+                if (slope > -emaSlopeMinPercent) { // Note: negative for downtrend
+                    logger.info("⏸️ {} SHORT filtered - EMA slope too flat ({:.3f}% > -{:.3f}%)",
+                            symbol, slope, emaSlopeMinPercent);
+                    return; // Not enough downward momentum
+                }
+                logger.debug("✅ {} EMA slope check passed (bearish): {:.3f}%", symbol, slope);
+            }
+
+            // ========== LAYER 3: EMA ALIGNMENT (Bearish Structure) ==========
             boolean isSellSignal = false;
             String sellReason = "";
 
-            // EMA buffer: -0.3% to avoid sideways false signals
-            boolean trendDown = currentPrice < ema50_5m * emaMultiplierDown;
-            boolean momentumDown = rsi_5m < rsiShortMax && rsi_5m > rsiShortMin;
+            // SHORT logic: same filters as LONG but reversed
+            // Use new RSI ranges for SHORT: 30-50 (weakness without oversold)
+            boolean trendDown = currentPrice < ema21_5m && ema21_5m < ema50_5m; // Bearish alignment
+            if (!trendDown) {
+                logger.debug("⏸️ {} SHORT filtered - EMA alignment broken (Price:{}, EMA21:{}, EMA50:{})",
+                        symbol, currentPrice, ema21_5m, ema50_5m);
+                return;
+            }
+
+            // ========== LAYER 4: RSI RANGE (Avoid Reversal Zones) ==========
+            boolean momentumDown = rsi_5m < rsiShortMaxNew && rsi_5m > rsiShortMinNew;
+
+            // ========== LAYER 5: MACD CONFIRMATION ==========
             boolean macdBearish = macd < (macdSignal - macdSignalTolerance);
 
-            // Changed to AND logic: ALL 3 conditions must be met for higher quality signals
+            // ========== LAYER 6: VOLUME CONFIRMATION ==========
+            boolean volumeOkShort = true;
+            if (volumeFilterEnabled) {
+                volumeOkShort = indicatorService.checkVolumeConfirmation(series5m, volumeMinMultiplier, volumePeriod);
+                if (!volumeOkShort) {
+                    logger.debug("⏸️ {} SHORT filtered - Volume too low", symbol);
+                    return;
+                }
+            }
+
+            // **ALL conditions must be met for SHORT**
             int conditionsMetShort = 0;
             if (trendDown)
                 conditionsMetShort++;
