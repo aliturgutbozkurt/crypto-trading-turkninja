@@ -81,11 +81,6 @@ public class App {
     }
 
     @Bean
-    public MultiTimeframeAnalyzer multiTimeframeAnalyzer(FuturesBinanceService futuresBinanceService) {
-        return new MultiTimeframeAnalyzer(futuresBinanceService);
-    }
-
-    @Bean
     public OrderBookService orderBookService() {
         return new OrderBookService();
     }
@@ -94,9 +89,9 @@ public class App {
     public StrategyEngine strategyEngine(FuturesBinanceService futuresBinanceService,
             FuturesWebSocketService webSocketService, IndicatorService indicatorService, RiskManager riskManager,
             PositionTracker positionTracker, OrderBookService orderBookService,
-            MultiTimeframeAnalyzer multiTimeframeAnalyzer, TelegramNotifier telegramNotifier) {
-        return new StrategyEngine(futuresBinanceService, webSocketService, indicatorService, riskManager,
-                positionTracker, orderBookService, multiTimeframeAnalyzer, telegramNotifier);
+            TelegramNotifier telegramNotifier) {
+        return new StrategyEngine(webSocketService, futuresBinanceService, indicatorService, riskManager,
+                positionTracker, orderBookService, telegramNotifier);
     }
 
     @Bean

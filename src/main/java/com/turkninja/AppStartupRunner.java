@@ -93,7 +93,7 @@ public class AppStartupRunner implements CommandLineRunner {
                 }
 
                 List<String> symbols = Arrays.asList("BTCUSDT", "ETHUSDT", "ATOMUSDT",
-                        "SOLUSDT", "DOGEUSDT", "XRPUSDT", "BCHUSDT", "ALGOUSDT",
+                        "SOLUSDT", "DOGEUSDT", "XRPUSDT", "ALGOUSDT",
                         "DOTUSDT", "AVAXUSDT", "LINKUSDT", "BNBUSDT",
                         "ADAUSDT", "NEARUSDT", "SANDUSDT", "MANAUSDT", "ARBUSDT");
                 for (String sym : symbols) {
@@ -115,7 +115,7 @@ public class AppStartupRunner implements CommandLineRunner {
             });
             // Start Kline stream for all symbols (5m candles)
             List<String> klineSymbols = Arrays.asList("BTCUSDT", "ETHUSDT", "ATOMUSDT", "SOLUSDT", "DOGEUSDT",
-                    "XRPUSDT", "BCHUSDT", "ALGOUSDT", "DOTUSDT", "AVAXUSDT", "LINKUSDT", "BNBUSDT",
+                    "XRPUSDT", "ALGOUSDT", "DOTUSDT", "AVAXUSDT", "LINKUSDT", "BNBUSDT",
                     "ADAUSDT", "NEARUSDT", "SANDUSDT", "MANAUSDT", "ARBUSDT");
             webSocketService.startKlineStream(klineSymbols);
             logger.info("Kline stream started");

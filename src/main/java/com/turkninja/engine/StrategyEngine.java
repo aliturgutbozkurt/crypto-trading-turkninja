@@ -30,12 +30,12 @@ public class StrategyEngine {
     private final RiskManager riskManager;
     private final PositionTracker positionTracker;
     private final OrderBookService orderBookService;
-    private final MultiTimeframeAnalyzer multiTfAnalyzer;
+
     private final TelegramNotifier telegram;
     private WebSocketPushService webSocketPushService; // Optional, for UI notifications
 
     private List<String> tradingSymbols = Arrays.asList(
-            "ETHUSDT", "SOLUSDT", "DOGEUSDT", "XRPUSDT", "BCHUSDT", "ATOMUSDT",
+            "ETHUSDT", "SOLUSDT", "DOGEUSDT", "XRPUSDT", "ATOMUSDT",
             "ALGOUSDT", "DOTUSDT", "AVAXUSDT", "LINKUSDT", "BNBUSDT",
             "ADAUSDT", "NEARUSDT", "SANDUSDT", "MANAUSDT", "ARBUSDT");
 
@@ -53,16 +53,16 @@ public class StrategyEngine {
     // private static final double MAX_POSITION_PERCENT = 0.25; // Moved to Config
     // private static final double MIN_POSITION_USDT = 4.0; // Moved to Config
 
-    public StrategyEngine(FuturesBinanceService futuresService, FuturesWebSocketService webSocketService,
+    public StrategyEngine(FuturesWebSocketService webSocketService, FuturesBinanceService futuresService,
             IndicatorService indicatorService, RiskManager riskManager, PositionTracker positionTracker,
-            OrderBookService orderBookService, MultiTimeframeAnalyzer multiTfAnalyzer, TelegramNotifier telegram) {
+            OrderBookService orderBookService, TelegramNotifier telegram) {
         this.futuresService = futuresService;
         this.webSocketService = webSocketService;
         this.indicatorService = indicatorService;
         this.riskManager = riskManager;
         this.positionTracker = positionTracker;
         this.orderBookService = orderBookService;
-        this.multiTfAnalyzer = multiTfAnalyzer;
+
         this.telegram = telegram;
         // Load configurable entry filter parameters
         rsiLongMin = Double.parseDouble(Config.get("strategy.rsi.long.min", "50"));
@@ -71,18 +71,8 @@ public class StrategyEngine {
         rsiShortMax = Double.parseDouble(Config.get("strategy.rsi.short.max", "50"));
         macdSignalTolerance = Double.parseDouble(Config.get("strategy.macd.signal.tolerance", "0.00001"));
         emaBufferPercent = Double.parseDouble(Config.get("strategy.ema.buffer.percent", "0.007"));
-        useMultiTimeframe = Boolean.parseBoolean(Config.get("strategy.use.multitimeframe", "true"));
 
-        // Load NWE config
-        nweEnabled = Boolean.parseBoolean(Config.get("strategy.nwe.enabled", "true"));
-        nweMinBandwidthPercent = Double.parseDouble(Config.get("strategy.nwe.min_bandwidth_percent", "0.01"));
-
-        // Load RSI Bands config
-        rsiBandsEnabled = Boolean.parseBoolean(Config.get("strategy.rsi.bands.enabled", "true"));
-        rsiBandsMinWidth = Double.parseDouble(Config.get("strategy.rsi.bands.min_width", "10.0"));
-
-        // Load Super Trend config
-        superTrendEnabled = Boolean.parseBoolean(Config.get("strategy.supertrend.enabled", "false"));
+        // Disabled indicators removed (NWE, RSI Bands, Super Trend)
 
         // Load new filters for High Win Rate Strategy
         adxEnabled = Boolean.parseBoolean(Config.get("strategy.adx.enabled", "true"));
@@ -105,7 +95,7 @@ public class StrategyEngine {
 
         logger.info(
                 "Strategy Config Loaded: RSI [{}-{}] / [{}-{}], EMA Buffer: {}%, Multi-TF: {}, ADX: {}, EMA Slope: {}, Volume: {}",
-                rsiLongMin, rsiLongMax, rsiShortMin, rsiShortMax, emaBufferPercent * 100, useMultiTimeframe,
+                rsiLongMin, rsiLongMax, rsiShortMin, rsiShortMax, emaBufferPercent * 100,
                 adxEnabled, emaSlopeEnabled, volumeFilterEnabled);
 
         // Batch signal selection config
@@ -121,18 +111,8 @@ public class StrategyEngine {
     private double rsiShortMax;
     private double macdSignalTolerance;
     private double emaBufferPercent;
-    private boolean useMultiTimeframe;
 
-    // Nadaraya-Watson Envelope parameters
-    private boolean nweEnabled;
-    private double nweMinBandwidthPercent;
-
-    // RSI Bands parameters
-    private boolean rsiBandsEnabled;
-    private double rsiBandsMinWidth;
-
-    // Super Trend parameters
-    private boolean superTrendEnabled;
+    // Disabled indicators removed (NWE, RSI Bands, Super Trend)
 
     // High Win Rate Strategy Filters
     private boolean adxEnabled;
@@ -434,56 +414,7 @@ public class StrategyEngine {
             }
 
             if (isBuySignal) {
-                // NWE Filter (if enabled)
-                if (nweEnabled && indicators5m.containsKey("NWE_BANDWIDTH_PERCENT")) {
-                    double nweUpper = indicators5m.getOrDefault("NWE_UPPER", 0.0);
-                    double nweLower = indicators5m.getOrDefault("NWE_LOWER", 0.0);
-                    double nweBandwidth = indicators5m.get("NWE_BANDWIDTH_PERCENT");
-
-                    // Skip if market is too choppy (narrow bands)
-                    if (nweBandwidth < nweMinBandwidthPercent) {
-                        logger.info("⏸️ {} LONG filtered - NWE bands too narrow ({}% < {}%)",
-                                symbol, String.format("%.2f", nweBandwidth * 100),
-                                String.format("%.2f", nweMinBandwidthPercent * 100));
-                        return;
-                    }
-
-                    // Prefer entries near lower band for LONG (better risk/reward)
-                    double distanceToLower = Math.abs(currentPrice - nweLower) / nweLower;
-                    if (currentPrice < nweLower || distanceToLower < 0.005) {
-                        logger.info("✅ {} LONG NWE confirmed - price near/below lower band", symbol);
-                    } else if (currentPrice > nweUpper) {
-                        logger.info("⏸️ {} LONG filtered - price already above NWE upper band", symbol);
-                        return;
-                    }
-                }
-
-                // RSI Bands Filter (if enabled)
-                if (rsiBandsEnabled && indicators5m.containsKey("RSI_BANDWIDTH")) {
-                    double rsiLowerBand = indicators5m.getOrDefault("RSI_LOWER_BAND", 0.0);
-                    double rsiUpperBand = indicators5m.getOrDefault("RSI_UPPER_BAND", 100.0);
-                    double rsiBandwidth = indicators5m.getOrDefault("RSI_BANDWIDTH", 0.0);
-
-                    // 1. Squeeze Filter: Skip if bands are too narrow (low volatility)
-                    if (rsiBandwidth < rsiBandsMinWidth) {
-                        logger.info("⏸️ {} LONG filtered - RSI Bands squeeze (Width: {:.2f} < {:.2f})",
-                                symbol, rsiBandwidth, rsiBandsMinWidth);
-                        return;
-                    }
-                    // 2. Dynamic Oversold Check: RSI should be near lower band
-                    // Allow entry if RSI is below lower band OR within 10% of it
-                    double threshold = rsiLowerBand + (rsiBandwidth * 0.2); // Lower 20% of the band
-
-                    if (rsi_5m > threshold) {
-                        logger.info(
-                                "⏸️ {} LONG filtered - RSI ({:.2f}) too high relative to dynamic lower band ({:.2f})",
-                                symbol, rsi_5m, rsiLowerBand);
-                        return;
-                    }
-
-                    logger.info("✅ {} LONG RSI Bands confirmed - RSI ({:.2f}) in buy zone (Lower Band: {:.2f})",
-                            symbol, rsi_5m, rsiLowerBand);
-                }
+                // Disabled filters removed (NWE, RSI Bands, Super Trend)
 
                 // BTC Trend Check: Don't LONG if BTC is bearish
                 if (btcTrend.equals("BEARISH")) {
@@ -491,25 +422,10 @@ public class StrategyEngine {
                     return;
                 }
 
-                // Multi-Timeframe Confirmation: Check 1H trend
-                if (useMultiTimeframe && !multiTfAnalyzer.isSignalConfirmed(symbol, "BUY")) {
-                    logger.info("⏸️ {} LONG signal filtered - 1H trend not bullish", symbol);
-                    return; // Skip this trade
-                }
-
                 // Order Book Confirmation (Imbalance + Walls)
                 if (!orderBookService.confirmBuySignal(symbol, currentPrice)) {
                     logger.info("⏸️ {} LONG signal filtered by Order Book (Imbalance/Walls)", symbol);
                     return;
-                }
-
-                // Super Trend Filter
-                if (superTrendEnabled && indicators5m.containsKey("SUPER_TREND_DIRECTION")) {
-                    double trendDirection = indicators5m.get("SUPER_TREND_DIRECTION");
-                    if (trendDirection < 0) { // Bearish
-                        logger.info("⏸️ {} LONG signal filtered - Super Trend is Bearish", symbol);
-                        return;
-                    }
                 }
 
                 // Batch mode: Calculate score and add to batch
@@ -609,57 +525,7 @@ public class StrategyEngine {
             }
 
             if (isSellSignal) {
-                // NWE Filter (if enabled)
-                if (nweEnabled && indicators5m.containsKey("NWE_BANDWIDTH_PERCENT")) {
-                    double nweUpper = indicators5m.getOrDefault("NWE_UPPER", 0.0);
-                    double nweLower = indicators5m.getOrDefault("NWE_LOWER", 0.0);
-                    double nweBandwidth = indicators5m.get("NWE_BANDWIDTH_PERCENT");
-
-                    // Skip if market is too choppy (narrow bands)
-                    if (nweBandwidth < nweMinBandwidthPercent) {
-                        logger.info("⏸️ {} SHORT filtered - NWE bands too narrow ({}% < {}%)",
-                                symbol, String.format("%.2f", nweBandwidth * 100),
-                                String.format("%.2f", nweMinBandwidthPercent * 100));
-                        return;
-                    }
-
-                    // Prefer entries near upper band for SHORT (better risk/reward)
-                    double distanceToUpper = Math.abs(currentPrice - nweUpper) / nweUpper;
-                    if (currentPrice > nweUpper || distanceToUpper < 0.005) {
-                        logger.info("✅ {} SHORT NWE confirmed - price near/above upper band", symbol);
-                    } else if (currentPrice < nweLower) {
-                        logger.info("⏸️ {} SHORT filtered - price already below NWE lower band", symbol);
-                        return;
-                    }
-                }
-
-                // RSI Bands Filter (if enabled)
-                if (rsiBandsEnabled && indicators5m.containsKey("RSI_BANDWIDTH")) {
-                    double rsiLowerBand = indicators5m.getOrDefault("RSI_LOWER_BAND", 0.0);
-                    double rsiUpperBand = indicators5m.getOrDefault("RSI_UPPER_BAND", 100.0);
-                    double rsiBandwidth = indicators5m.getOrDefault("RSI_BANDWIDTH", 0.0);
-
-                    // 1. Squeeze Filter: Skip if bands are too narrow (low volatility)
-                    if (rsiBandwidth < rsiBandsMinWidth) {
-                        logger.info("⏸️ {} SHORT filtered - RSI Bands squeeze (Width: {:.2f} < {:.2f})",
-                                symbol, rsiBandwidth, rsiBandsMinWidth);
-                        return;
-                    }
-
-                    // 2. Dynamic Oversold Check: RSI should be near lower band
-                    // Allow entry if RSI is below lower band OR within 10% of it
-                    double threshold = rsiLowerBand + (rsiBandwidth * 0.2); // Lower 20% of the band
-
-                    if (rsi_5m < threshold) {
-                        logger.info(
-                                "⏸️ {} SHORT filtered - RSI ({:.2f}) too low relative to dynamic upper band ({:.2f})",
-                                symbol, rsi_5m, rsiUpperBand);
-                        return;
-                    }
-
-                    logger.info("✅ {} SHORT RSI Bands confirmed - RSI ({:.2f}) in sell zone (Upper Band: {:.2f})",
-                            symbol, rsi_5m, rsiUpperBand);
-                }
+                // Disabled filters removed (NWE, RSI Bands, Super Trend)
 
                 // BTC Trend Check: Don't SHORT if BTC is bullish
                 if (btcTrend.equals("BULLISH")) {
@@ -667,25 +533,10 @@ public class StrategyEngine {
                     return;
                 }
 
-                // Multi-Timeframe Confirmation: Check 1H trend
-                if (useMultiTimeframe && !multiTfAnalyzer.isSignalConfirmed(symbol, "SELL")) {
-                    logger.info("⏸️ {} SHORT signal filtered - 1H trend not bearish", symbol);
-                    return; // Skip this trade
-                }
-
                 // Order Book Confirmation (Imbalance + Walls)
                 if (!orderBookService.confirmSellSignal(symbol, currentPrice)) {
                     logger.info("⏸️ {} SHORT signal filtered by Order Book (Imbalance/Walls)", symbol);
                     return;
-                }
-
-                // Super Trend Filter
-                if (superTrendEnabled && indicators5m.containsKey("SUPER_TREND_DIRECTION")) {
-                    double trendDirection = indicators5m.get("SUPER_TREND_DIRECTION");
-                    if (trendDirection > 0) { // Bullish
-                        logger.info("⏸️ {} SHORT signal filtered - Super Trend is Bullish", symbol);
-                        return;
-                    }
                 }
 
                 // Batch mode: Calculate score and add to batch
@@ -1009,22 +860,6 @@ public class StrategyEngine {
         // Larger divergence = stronger signal
         double macdDivergence = Math.abs(macd - macdSignal);
         score.macdScore = Math.min(macdDivergence * 10000, 25); // Scale and cap
-
-        // 3. Trend Score (0-20 points)
-        MultiTimeframeAnalyzer.TrendDirection h1Trend = multiTfAnalyzer.get1HTrend(symbol);
-        if ("BUY".equals(side)) {
-            if (h1Trend == MultiTimeframeAnalyzer.TrendDirection.BULLISH) {
-                score.trendScore = 20; // Perfect alignment
-            } else if (h1Trend == MultiTimeframeAnalyzer.TrendDirection.NEUTRAL) {
-                score.trendScore = 10; // Neutral okay
-            }
-        } else { // SELL
-            if (h1Trend == MultiTimeframeAnalyzer.TrendDirection.BEARISH) {
-                score.trendScore = 20;
-            } else if (h1Trend == MultiTimeframeAnalyzer.TrendDirection.NEUTRAL) {
-                score.trendScore = 10;
-            }
-        }
 
         // 4. Volume Score (0-15 points) - placeholder, need volume data
         // For now, give moderate score
