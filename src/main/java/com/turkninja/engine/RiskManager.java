@@ -30,6 +30,7 @@ public class RiskManager {
     private final FuturesBinanceService futuresService;
     private FuturesWebSocketService webSocketService; // For cached mark prices
     private final OrderBookService orderBookService; // For liquidity and wall detection
+    private final CorrelationService correlationService; // For correlation risk management
     private final ScheduledExecutorService monitoringExecutor;
     private volatile boolean monitoringActive = false;
 
@@ -55,11 +56,17 @@ public class RiskManager {
     private final double EARLY_EXIT_SLIPPAGE_PERCENT = 0.008; // Exit early if slippage > 0.8%
     private final double WALL_PROXIMITY_PERCENT = 0.002; // 0.2% proximity to walls
 
+    // Correlation Risk Settings
+    private final boolean correlationFilterEnabled;
+    private final double correlationThreshold;
+    private final int minPositionsForCorrelation;
+
     public RiskManager(PositionTracker positionTracker, FuturesBinanceService futuresService,
-            OrderBookService orderBookService) {
+            OrderBookService orderBookService, CorrelationService correlationService) {
         this.positionTracker = positionTracker;
         this.futuresService = futuresService;
         this.orderBookService = orderBookService;
+        this.correlationService = correlationService;
         this.maxConcurrentPositions = Config.getInt("risk.max_concurrent_positions", 1000);
         this.maxPositionSizeUsdt = Config.getDouble("risk.max_position_size", 1000.0);
         this.dailyLossLimit = Config.getDouble("risk.daily_loss_limit", 500.0);
@@ -70,6 +77,11 @@ public class RiskManager {
 
         // Load order book aware settings
         this.ORDER_BOOK_AWARE_ENABLED = Boolean.parseBoolean(Config.get("risk.orderbook.enabled", "true"));
+
+        // Load correlation filter settings
+        this.correlationFilterEnabled = Boolean.parseBoolean(Config.get("risk.correlation.enabled", "true"));
+        this.correlationThreshold = Config.getDouble("risk.correlation.threshold", 0.75);
+        this.minPositionsForCorrelation = Config.getInt("risk.correlation.min.positions", 3);
 
         logger.info(
                 "RiskManager initialized with SL/TP automation (Max Position: ${}, Max Concurrent: {}, Daily Loss Limit: ${}, OrderBook Aware: {})",
@@ -518,6 +530,64 @@ public class RiskManager {
         }
 
         return true;
+    }
+
+    /**
+     * Check correlation risk - prevent opening highly correlated positions
+     * 
+     * @param symbol Symbol to check
+     * @param side   Position side (LONG/SHORT)
+     * @return true if safe to open, false if too correlated
+     */
+    public boolean checkCorrelationRisk(String symbol, String side) {
+        if (!correlationFilterEnabled) {
+            return true; // Filter disabled
+        }
+
+        try {
+            // Get open positions in same direction
+            var openPositions = positionTracker.getAllPositions().values()
+                    .stream()
+                    .filter(p -> p.side.equalsIgnoreCase(side))
+                    .toList();
+
+            // If we have fewer than threshold positions, no correlation risk yet
+            if (openPositions.size() < minPositionsForCorrelation) {
+                logger.debug("✅ {} {} - Only {} positions, correlation check skipped",
+                        symbol, side, openPositions.size());
+                return true;
+            }
+
+            // Get symbols of open positions
+            var openSymbols = openPositions.stream()
+                    .map(p -> p.symbol)
+                    .filter(s -> !s.equals(symbol)) // Exclude self
+                    .toList();
+
+            if (openSymbols.isEmpty()) {
+                return true;
+            }
+
+            // Calculate average correlation
+            double avgCorrelation = correlationService.getAverageCorrelation(symbol, openSymbols);
+
+            // Check if too correlated
+            if (avgCorrelation > correlationThreshold) {
+                logger.warn(
+                        "⚠️ {} {} REJECTED - High correlation ({:.2f}) with {} open {} positions (Threshold: {:.2f})",
+                        symbol, side, avgCorrelation, openPositions.size(), side, correlationThreshold);
+
+                return false; // REJECT
+            }
+
+            logger.info("✅ {} {} correlation check passed - Avg correlation: {:.2f} (Threshold: {:.2f})",
+                    symbol, side, avgCorrelation, correlationThreshold);
+            return true; // ACCEPT
+
+        } catch (Exception e) {
+            logger.error("Error checking correlation for {} {}", symbol, side, e);
+            return true; // Don't block on errors
+        }
     }
 
     /**

@@ -59,10 +59,16 @@ public class App {
     }
 
     @Bean
+    public CorrelationService correlationService(FuturesBinanceService futuresBinanceService) {
+        return new CorrelationService(futuresBinanceService);
+    }
+
+    @Bean
     public RiskManager riskManager(FuturesBinanceService futuresBinanceService,
             FuturesWebSocketService webSocketService,
-            OrderBookService orderBookService) {
-        RiskManager manager = new RiskManager(null, futuresBinanceService, orderBookService);
+            OrderBookService orderBookService,
+            CorrelationService correlationService) {
+        RiskManager manager = new RiskManager(null, futuresBinanceService, orderBookService, correlationService);
         manager.setWebSocketService(webSocketService);
         return manager;
     }

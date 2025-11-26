@@ -565,6 +565,14 @@ public class StrategyEngine {
         try {
             // 1. Calculate position size
             double positionSize = calculatePositionSize(symbol, price);
+
+            // 2. Check correlation risk (NEW - Phase 1.1)
+            if (!riskManager.checkCorrelationRisk(symbol, side)) {
+                logger.warn("⏸️ {} {} blocked by correlation filter", symbol, side);
+                return; // Don't enter - too correlated with existing positions
+            }
+
+            // 3. Place order
             double minPositionUsdt = Config.getDouble("strategy.position.min_usdt", 4.0);
 
             if (positionSize < minPositionUsdt) {
