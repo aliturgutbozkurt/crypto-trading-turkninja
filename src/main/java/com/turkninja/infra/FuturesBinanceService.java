@@ -447,6 +447,70 @@ public class FuturesBinanceService {
         }
     }
 
+    /**
+     * PARTIAL CLOSE - Close a percentage of the position for partial take profit
+     * 
+     * @param symbol       Symbol to partially close
+     * @param closePercent Percentage to close (0.0-1.0, e.g., 0.5 = 50%)
+     * @return JSON response from order placement
+     */
+    public String closePositionPartial(String symbol, double closePercent) {
+        if (dryRun) {
+            logger.info("[DRY RUN] Partial position close: {}% of {}", closePercent * 100, symbol);
+            return "{\"symbol\": \"" + symbol + "\", \"status\": \"PARTIAL_CLOSED\", \"closePercent\": " + closePercent
+                    + "}";
+        }
+
+        try {
+            // Get current position
+            String positionJson = getPositionInfo(symbol);
+            JSONArray positions = new JSONArray(positionJson);
+
+            if (positions.length() == 0) {
+                return "{\"error\": \"No position found\"}";
+            }
+
+            JSONObject position = positions.getJSONObject(0);
+            double positionAmt = position.getDouble("positionAmt");
+
+            if (positionAmt == 0) {
+                return "{\"info\": \"No open position\"}";
+            }
+
+            // Calculate quantity to close
+            double quantityToClose = Math.abs(positionAmt) * closePercent;
+
+            // Get precision and round quantity
+            int precision = getQuantityPrecision(symbol);
+            double roundedQuantity = Math.floor(quantityToClose * Math.pow(10, precision)) / Math.pow(10, precision);
+
+            if (roundedQuantity == 0) {
+                logger.warn("Rounded quantity is 0 for {} (orig: {}). Skipping partial close.", symbol,
+                        quantityToClose);
+                return "{\"error\": \"Quantity too small after rounding\"}";
+            }
+
+            // Determine opposite side
+            String side = positionAmt > 0 ? "SELL" : "BUY";
+
+            LinkedHashMap<String, Object> params = new LinkedHashMap<>();
+            params.put("symbol", symbol);
+            params.put("side", side);
+            params.put("type", "MARKET");
+            params.put("quantity", roundedQuantity);
+            params.put("reduceOnly", true);
+
+            logger.info("💰 PARTIAL TAKE PROFIT: Closing {}% ({} {}) of {} position",
+                    closePercent * 100, roundedQuantity, symbol, positionAmt > 0 ? "LONG" : "SHORT");
+
+            return signedRequest("POST", "/fapi/v1/order", params);
+
+        } catch (Exception e) {
+            logger.error("Failed to partially close position for {}", symbol, e);
+            return "{\"error\": \"" + e.getMessage() + "\"}";
+        }
+    }
+
     private boolean dryRun = false;
 
     public void setDryRun(boolean dryRun) {

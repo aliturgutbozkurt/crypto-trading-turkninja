@@ -141,7 +141,18 @@ public class DashboardRestController {
                 // Calculate Total Margin Balance = Wallet Balance + Unrealized PnL
                 double totalMarginBalance = totalWalletBalance + liveUnrealizedPnL;
 
-                int activePositions = positionTracker.getAllPositions().size();
+                // Count ACTUAL active positions from Binance (not PositionTracker)
+                int activePositions = 0;
+                if (positionsArray != null) {
+                    for (int i = 0; i < positionsArray.length(); i++) {
+                        JSONObject pos = positionsArray.getJSONObject(i);
+                        double positionAmt = pos.getDouble("positionAmt");
+                        if (positionAmt != 0) {
+                            activePositions++;
+                        }
+                    }
+                }
+
                 String strategyStatus = strategyEngine != null && strategyEngine.isTradingActive() ? "Active"
                         : "Stopped";
 

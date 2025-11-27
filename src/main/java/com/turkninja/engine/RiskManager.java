@@ -18,14 +18,20 @@ import java.util.concurrent.TimeUnit;
 public class RiskManager {
     private static final Logger logger = LoggerFactory.getLogger(RiskManager.class);
 
-    // Symbol -> Highest Price since entry (for Long) or Lowest Price (for Short)
-    private final Map<String, BigDecimal> extremePrices = new ConcurrentHashMap<>();
-
     // Symbol -> Trailing Stop Percentage (e.g., 0.02 for 2%)
     private final Map<String, BigDecimal> trailingStopPercentages = new ConcurrentHashMap<>();
 
+    // Symbol -> Extreme Price (Highest for LONG, Lowest for SHORT)
+    private final Map<String, BigDecimal> extremePrices = new ConcurrentHashMap<>();
+
     // Symbol -> Entry Price
     private final Map<String, BigDecimal> entryPrices = new ConcurrentHashMap<>();
+
+    // Symbol -> Trailing Stop Activated?
+    private final Map<String, Boolean> trailingActivated = new ConcurrentHashMap<>();
+
+    // Symbol -> Partial TP Triggered? (for 0.3% profit target)
+    private final Map<String, Boolean> partialTpTriggered = new ConcurrentHashMap<>();
 
     private PositionTracker positionTracker;
     private final FuturesBinanceService futuresService;
@@ -52,6 +58,11 @@ public class RiskManager {
     private final double COMMISSION_RATE_ROUND_TRIP = 0.001; // 0.1% (0.05% Entry + 0.05% Exit)
     private final double TRAILING_ACTIVATION_THRESHOLD;
 
+    // Partial Take Profit settings
+    private final boolean PARTIAL_TP_ENABLED;
+    private final double PARTIAL_TP_THRESHOLD; // e.g., 0.003 for 0.3%
+    private final double PARTIAL_TP_CLOSE_PERCENT; // e.g., 0.50 for 50%
+
     // Order Book Aware Stop Settings
     private final boolean ORDER_BOOK_AWARE_ENABLED;
     private final double MAX_SLIPPAGE_PERCENT = 0.01; // 1% max slippage
@@ -76,8 +87,13 @@ public class RiskManager {
         this.dailyLossLimit = Config.getDouble("risk.daily_loss_limit", 500.0);
         this.monitoringExecutor = Executors.newSingleThreadScheduledExecutor(Thread.ofVirtual().factory());
 
-        // Load trailing activation threshold from config (default 0.3%)
-        this.TRAILING_ACTIVATION_THRESHOLD = Config.getDouble("strategy.trailing.activation.threshold", 0.003);
+        // Load trailing activation threshold from config (default 0.2%)
+        this.TRAILING_ACTIVATION_THRESHOLD = Config.getDouble("strategy.trailing.activation.threshold", 0.002);
+
+        // Load partial TP settings
+        this.PARTIAL_TP_ENABLED = Boolean.parseBoolean(Config.get("risk.partial.tp.enabled", "false"));
+        this.PARTIAL_TP_THRESHOLD = Config.getDouble("risk.partial.tp.threshold", 0.003); // 0.3%
+        this.PARTIAL_TP_CLOSE_PERCENT = Config.getDouble("risk.partial.tp.close.percent", 0.50); // 50%
 
         // Load order book aware settings
         this.ORDER_BOOK_AWARE_ENABLED = Boolean.parseBoolean(Config.get("risk.orderbook.enabled", "true"));
@@ -222,6 +238,77 @@ public class RiskManager {
         entryPrices.remove(symbol);
         extremePrices.remove(symbol);
         trailingStopPercentages.remove(symbol);
+        partialTpTriggered.remove(symbol); // Also clear partial TP trigger
+    }
+
+    /**
+     * Calculate profit percentage for a position
+     * 
+     * @param position     Position to calculate profit for
+     * @param currentPrice Current market price
+     * @return Profit percentage (0.003 = 0.3%)
+     */
+    private double calculateProfitPercent(PositionTracker.Position position, double currentPrice) {
+        double profitPercent;
+        if (position.side.equals("BUY")) {
+            // LONG: profit when current > entry
+            profitPercent = (currentPrice - position.entryPrice) / position.entryPrice;
+        } else {
+            // SHORT: profit when current < entry
+            profitPercent = (position.entryPrice - currentPrice) / position.entryPrice;
+        }
+        return profitPercent;
+    }
+
+    /**
+     * Execute partial close of position for partial take profit
+     * 
+     * @param symbol       Symbol to close
+     * @param position     Current position
+     * @param currentPrice Current market price
+     * @param closePercent Percentage to close (0.0-1.0)
+     */
+    private void executePartialClose(String symbol, PositionTracker.Position position,
+            double currentPrice, double closePercent) {
+        try {
+            // Calculate profit locked in
+            double profitPercent = calculateProfitPercent(position, currentPrice) * 100;
+
+            logger.info("🎯 PARTIAL TAKE PROFIT TRIGGERED for {}: {:.2f}% profit reached! Closing {}% of position",
+                    symbol, profitPercent, closePercent * 100);
+
+            // Execute partial close via Binance API
+            String result = futuresService.closePositionPartial(symbol, closePercent);
+
+            logger.info("💰 Partial TP executed: {}", result);
+
+            // Update position quantity in Position Tracker
+            double newQuantity = position.quantity * (1.0 - closePercent);
+            positionTracker.updatePositionQuantity(symbol, newQuantity);
+
+            // Record to InfluxDB (optional)
+            if (influxDBService != null) {
+                try {
+                    double partialPnl = (profitPercent / 100) * position.entryPrice
+                            * (position.quantity * closePercent);
+                    influxDBService.writePositionClose(
+                            symbol,
+                            position.side,
+                            currentPrice,
+                            partialPnl,
+                            "PARTIAL_TP",
+                            java.time.Duration.between(
+                                    java.time.Instant.parse(position.entryTime),
+                                    java.time.Instant.now()).getSeconds(),
+                            java.time.Instant.now());
+                } catch (Exception e) {
+                    logger.warn("Failed to record partial TP to InfluxDB: {}", e.getMessage());
+                }
+            }
+
+        } catch (Exception e) {
+            logger.error("Failed to execute partial close for {}: {}", symbol, e.getMessage(), e);
+        }
     }
 
     /**
@@ -484,7 +571,20 @@ public class RiskManager {
                 return;
             }
 
+            // 1.5. Check Partial Take Profit (NEW!)
+            if (PARTIAL_TP_ENABLED && !partialTpTriggered.getOrDefault(symbol, false)) {
+                double profitPercent = calculateProfitPercent(position, currentPrice);
+
+                if (profitPercent >= PARTIAL_TP_THRESHOLD) {
+                    executePartialClose(symbol, position, currentPrice, PARTIAL_TP_CLOSE_PERCENT);
+                    partialTpTriggered.put(symbol, true);
+
+                    // Continue - still check trailing stop on remaining position
+                }
+            }
+
             // 2. Check Trailing Stop (only if fixed SL/TP didn't trigger)
+
             boolean trailingStopTriggered = checkExitCondition(
                     symbol,
                     BigDecimal.valueOf(currentPrice),

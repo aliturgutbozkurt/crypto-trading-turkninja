@@ -146,6 +146,59 @@ tail -f startup_log.txt
 
 ---
 
+### 🔧 Detaylı Konfigürasyon Rehberi (`application.properties`)
+
+Bu dosya botun beynidir. Parametreleri değiştirerek botun karakterini (agresif/temkinli) değiştirebilirsiniz.
+
+#### **1. Genel Ayarlar**
+| Parametre | Varsayılan | Açıklama | Etkisi |
+|-----------|------------|----------|--------|
+| `DRY_RUN` | `false` | Simülasyon modu | `true` yaparsanız gerçek para harcamaz, sadece log yazar. Test için idealdir. |
+| `strategy.leverage` | `20` | Kaldıraç oranı | Daha yüksek kaldıraç = Daha yüksek risk ve potansiyel kazanç. |
+
+#### **2. Strateji Ayarları (Giriş Sinyalleri)**
+| Parametre | Varsayılan | Açıklama | Değiştirirseniz Ne Olur? |
+|-----------|------------|----------|--------------------------|
+| `strategy.rsi.buy.threshold` | `45` | RSI Alış Eşiği | **Düşürürseniz:** Daha az ama daha güvenli işlem açar. **Yükseltirseniz:** Daha sık işlem açar (risk artar). |
+| `strategy.rsi.sell.threshold` | `55` | RSI Satış Eşiği | **Yükseltirseniz:** Daha az ama güvenli işlem. **Düşürürseniz:** Daha sık işlem. |
+| `strategy.atr.min.threshold` | `0.1` | Volatilite Filtresi | **Yükseltirseniz:** Sadece çok hareketli piyasada işlem açar (yatay piyasadan kaçar). |
+| `strategy.mtf.enabled` | `true` | Çoklu Zaman Dilimi | `true` ise 1 saatlik trende ters işlem açmaz. `false` yaparsanız daha çok işlem açar ama fakeout riski artar. |
+
+#### **3. Risk Yönetimi (Çıkış Sinyalleri)**
+| Parametre | Varsayılan | Açıklama | Değiştirirseniz Ne Olur? |
+|-----------|------------|----------|--------------------------|
+| `risk.max_concurrent_positions` | `5` | Maksimum Pozisyon | Aynı anda açık olabilecek maksimum işlem sayısı. Bakiyenizi korumak için önemlidir. |
+| `risk.stop_loss_percent` | `0.02` | Stop Loss (%2) | **Düşürürseniz:** Zarar erken kesilir ama "stop patlatma" riski artar. |
+| `risk.take_profit_percent` | `0.05` | Sabit Kar Al (%5) | Genellikle Trailing Stop kullanıldığı için bu "acil durum" kar al noktasıdır. |
+
+#### **4. Kar Alma (Profit Taking) - ÖNEMLİ**
+Botun kar alma mekanizması iki aşamalıdır: **Partial TP** ve **Trailing Stop**.
+
+**A. Partial Take Profit (Parçalı Kar Alma)**
+Belirli bir kara ulaşınca pozisyonun yarısını kapatıp karı cebe atar.
+- `risk.partial.tp.enabled=true`: Aktif/Pasif.
+- `risk.partial.tp.threshold=0.003`: **%0.3** kara ulaşınca tetiklenir.
+- `risk.partial.tp.close.percent=0.50`: Pozisyonun **%50**'sini kapatır.
+
+**B. Trailing Stop (İzleyen Stop)**
+Kalan pozisyonu kar arttıkça takip eder.
+- `strategy.trailing.activation.threshold=0.002`: **%0.2** kara geçmeden devreye girmez.
+- `strategy.trailing.stop.percent=0.0015`: Fiyat zirveden **%0.15** düşerse kalan pozisyonu kapatır.
+
+> **Örnek Senaryo:** Fiyat %0.3 yükseldi.
+> 1. **Partial TP:** Pozisyonun yarısı satılır, kar cebe girer.
+> 2. **Trailing Stop:** Kalan yarı için stop seviyesi giriş fiyatının üzerine taşınır (Risk = 0).
+> 3. Fiyat yükselmeye devam ederse stop da yükselir. Dönerse stop olur ve yine karla çıkarsınız.
+
+#### **5. Bildirim Ayarları**
+| Parametre | Açıklama |
+|-----------|----------|
+| `telegram.enabled` | `true` yaparsanız Telegram bildirimleri açılır. |
+| `telegram.bot.token` | BotFather'dan alınan token. |
+| `telegram.chat.id` | Bildirim gidecek Chat ID. |
+
+---
+
 ### 📊 InfluxDB Veri Yapısı
 
 Sistem aşağıdaki measurement'ları InfluxDB'ye yazar:

@@ -7,11 +7,18 @@ import com.turkninja.engine.OrderBookService;
 import com.turkninja.infra.FuturesBinanceService;
 import com.turkninja.infra.FuturesWebSocketService;
 
+import com.turkninja.infra.TelegramNotifier;
 import com.turkninja.web.service.WebSocketPushService;
+import org.json.JSONArray;
+import org.json.JSONObject;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.stereotype.Component;
+
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 import java.util.Arrays;
 import java.util.ArrayList;
@@ -29,6 +36,9 @@ public class AppStartupRunner implements CommandLineRunner {
     private final StrategyEngine strategyEngine;
     private final OrderBookService orderBookService;
     private final WebSocketPushService webSocketPushService;
+    private final TelegramNotifier telegramNotifier;
+
+    private final ScheduledExecutorService statusScheduler = Executors.newSingleThreadScheduledExecutor();
 
     public AppStartupRunner(FuturesBinanceService futuresBinanceService,
             FuturesWebSocketService webSocketService,
@@ -36,7 +46,8 @@ public class AppStartupRunner implements CommandLineRunner {
             RiskManager riskManager,
             StrategyEngine strategyEngine,
             OrderBookService orderBookService,
-            WebSocketPushService webSocketPushService) {
+            WebSocketPushService webSocketPushService,
+            TelegramNotifier telegramNotifier) {
         this.futuresBinanceService = futuresBinanceService;
         this.webSocketService = webSocketService;
         this.positionTracker = positionTracker;
@@ -44,6 +55,7 @@ public class AppStartupRunner implements CommandLineRunner {
         this.strategyEngine = strategyEngine;
         this.orderBookService = orderBookService;
         this.webSocketPushService = webSocketPushService;
+        this.telegramNotifier = telegramNotifier;
     }
 
     @Override
@@ -140,6 +152,20 @@ public class AppStartupRunner implements CommandLineRunner {
             webSocketService.startMarkPriceStream(symbols.toArray(new String[0]));
             logger.info("Started Mark Price Stream for {} symbols", symbols.size());
 
+            // CRITICAL: Sync existing positions with RiskManager BEFORE starting monitoring
+            // This ensures trailing stops work for positions opened before restart
+            try {
+                JSONArray currentPositions = webSocketService.getCachedPositions();
+                if (currentPositions != null && currentPositions.length() > 0) {
+                    logger.info("🔄 Syncing {} existing positions with RiskManager for trailing stop monitoring...",
+                            currentPositions.length());
+                    positionTracker.syncPositions(currentPositions);
+                    logger.info("✅ Existing positions registered with RiskManager");
+                }
+            } catch (Exception e) {
+                logger.error("Failed to sync existing positions: {}", e.getMessage());
+            }
+
             // Start Risk Manager monitoring
             riskManager.startMonitoring();
 
@@ -157,6 +183,23 @@ public class AppStartupRunner implements CommandLineRunner {
 
             logger.info("✅ System Fully Initialized and Running");
             logger.info("✅ Web UI available at http://localhost:8080");
+
+            // Schedule periodic status report (every 5 minutes)
+            statusScheduler.scheduleAtFixedRate(() -> {
+                try {
+                    int positionCount = positionTracker.getAllPositions().size();
+                    double balance = futuresBinanceService.getAvailableBalance();
+
+                    String message = String.format("📊 Status Report:\nPositions: %d\nBalance: $%.2f",
+                            positionCount, balance);
+
+                    telegramNotifier.sendAlert(TelegramNotifier.AlertLevel.INFO, message);
+                } catch (Exception e) {
+                    logger.error("Failed to send periodic status report", e);
+                }
+            }, 5, 5, TimeUnit.MINUTES);
+
+            logger.info("✅ Periodic status reporting enabled (every 5 minutes)");
 
         } catch (Throwable t) {
             logger.error("Initialization failed", t);

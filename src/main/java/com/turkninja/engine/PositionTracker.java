@@ -101,25 +101,18 @@ public class PositionTracker {
     }
 
     /**
-     * Remove position from tracking
+     * Remove a position from tracking
      */
     public void removePosition(String symbol, double exitPrice) {
-        Position position = activePositions.remove(symbol);
-        if (position != null) {
-            double pnl = 0.0;
-            if (exitPrice > 0) {
-                if (position.side.equals("BUY")) {
-                    pnl = (exitPrice - position.entryPrice) * position.quantity;
-                } else {
-                    pnl = (position.entryPrice - exitPrice) * position.quantity;
-                }
-            }
+        Position removed = activePositions.remove(symbol);
+        if (removed != null) {
+            double pnl = calculateUnrealizedPnL(symbol, exitPrice);
 
             // Record trade to Kelly Position Sizer (for dynamic sizing)
             if (kellyPositionSizer != null && exitPrice > 0) {
                 boolean isWin = pnl > 0;
                 // Calculate profit ratio: (PnL / Position Size)
-                double positionSize = position.entryPrice * position.quantity;
+                double positionSize = removed.entryPrice * removed.quantity;
                 double profitRatio = positionSize > 0 ? pnl / positionSize : 0.0;
 
                 kellyPositionSizer.recordTrade(isWin, profitRatio);
@@ -130,6 +123,22 @@ public class PositionTracker {
             // Also clear from RiskManager
             riskManager.clearPosition(symbol);
             logger.info("Position removed from tracking: {} (Exit: {}, PnL: {})", symbol, exitPrice, pnl);
+        }
+    }
+
+    /**
+     * Update position quantity after partial close
+     * 
+     * @param symbol      Symbol to update
+     * @param newQuantity New quantity after partial close
+     */
+    public void updatePositionQuantity(String symbol, double newQuantity) {
+        Position position = activePositions.get(symbol);
+        if (position != null) {
+            double oldQuantity = position.quantity;
+            position.quantity = newQuantity;
+            logger.info("📉 Position quantity updated for {}: {} → {} ({:.1f}% reduction)",
+                    symbol, oldQuantity, newQuantity, ((oldQuantity - newQuantity) / oldQuantity) * 100);
         }
     }
 
@@ -240,7 +249,7 @@ public class PositionTracker {
         public final String symbol;
         public final String side;
         public final double entryPrice;
-        public final double quantity;
+        public double quantity; // NOT final - can be updated for partial closes
         public final String entryTime;
 
         public Position(String symbol, String side, double entryPrice, double quantity) {
