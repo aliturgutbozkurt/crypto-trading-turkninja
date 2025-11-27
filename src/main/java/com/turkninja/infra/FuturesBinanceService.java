@@ -415,18 +415,28 @@ public class FuturesBinanceService {
         try {
             // Get current position to determine side
             String positionJson = getPositionInfo(symbol);
+            logger.info("DEBUG: closePosition({}) Binance Response: {}", symbol, positionJson);
             JSONArray positions = new JSONArray(positionJson);
 
             if (positions.length() == 0) {
                 return "{\"error\": \"No position found\"}";
             }
 
-            JSONObject position = positions.getJSONObject(0);
-            double positionAmt = position.getDouble("positionAmt");
+            // Find the active position (iterate through all positions)
+            JSONObject position = null;
+            for (int i = 0; i < positions.length(); i++) {
+                JSONObject p = positions.getJSONObject(i);
+                if (p.getDouble("positionAmt") != 0) {
+                    position = p;
+                    break;
+                }
+            }
 
-            if (positionAmt == 0) {
+            if (position == null) {
                 return "{\"info\": \"No open position\"}";
             }
+
+            double positionAmt = position.getDouble("positionAmt");
 
             // Close position by placing opposite order
             String side = positionAmt > 0 ? "SELL" : "BUY";
@@ -438,6 +448,11 @@ public class FuturesBinanceService {
             params.put("type", "MARKET");
             params.put("quantity", quantity);
             params.put("reduceOnly", true);
+
+            // Support for Hedge Mode if positionSide is present and not BOTH
+            if (position.has("positionSide") && !"BOTH".equals(position.getString("positionSide"))) {
+                params.put("positionSide", position.getString("positionSide"));
+            }
 
             return signedRequest("POST", "/fapi/v1/order", params);
 
@@ -470,12 +485,21 @@ public class FuturesBinanceService {
                 return "{\"error\": \"No position found\"}";
             }
 
-            JSONObject position = positions.getJSONObject(0);
-            double positionAmt = position.getDouble("positionAmt");
+            // Find the active position (iterate through all positions)
+            JSONObject position = null;
+            for (int i = 0; i < positions.length(); i++) {
+                JSONObject p = positions.getJSONObject(i);
+                if (p.getDouble("positionAmt") != 0) {
+                    position = p;
+                    break;
+                }
+            }
 
-            if (positionAmt == 0) {
+            if (position == null) {
                 return "{\"info\": \"No open position\"}";
             }
+
+            double positionAmt = position.getDouble("positionAmt");
 
             // Calculate quantity to close
             double quantityToClose = Math.abs(positionAmt) * closePercent;
@@ -499,6 +523,11 @@ public class FuturesBinanceService {
             params.put("type", "MARKET");
             params.put("quantity", roundedQuantity);
             params.put("reduceOnly", true);
+
+            // Support for Hedge Mode if positionSide is present and not BOTH
+            if (position.has("positionSide") && !"BOTH".equals(position.getString("positionSide"))) {
+                params.put("positionSide", position.getString("positionSide"));
+            }
 
             logger.info("💰 PARTIAL TAKE PROFIT: Closing {}% ({} {}) of {} position",
                     closePercent * 100, roundedQuantity, symbol, positionAmt > 0 ? "LONG" : "SHORT");

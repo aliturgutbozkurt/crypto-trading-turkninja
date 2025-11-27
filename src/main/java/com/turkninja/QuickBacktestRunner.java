@@ -21,7 +21,10 @@ public class QuickBacktestRunner {
 
     // All trading symbols
     private static final List<String> ALL_SYMBOLS = Arrays.asList(
-            "BTCUSDT", "ETHUSDT", "SOLUSDT", "AVAXUSDT");
+            "BTCUSDT", "ETHUSDT", "SOLUSDT", "AVAXUSDT", "DOGEUSDT",
+            "XRPUSDT", "DOTUSDT", "LINKUSDT", "BNBUSDT", "ADAUSDT",
+            "NEARUSDT", "MATICUSDT", "LTCUSDT", "ETCUSDT", "ATOMUSDT",
+            "ARBUSDT", "OPUSDT", "SUIUSDT", "APTUSDT", "INJUSDT");
 
     public static void main(String[] args) {
         String startDate = "2025-10-27"; // 1 month ago (updated to current year)
@@ -80,7 +83,7 @@ public class QuickBacktestRunner {
 
             // Step A: Create RiskManager // Initialize Services
             RiskManager riskManager = new RiskManager(null, mockService, mockOrderBookService, correlationService,
-                    null);
+                    null, null); // null InfluxDB and TelegramNotifier for backtest
             PositionTracker positionTracker = new PositionTracker(riskManager);
             riskManager.setPositionTracker(positionTracker);
 

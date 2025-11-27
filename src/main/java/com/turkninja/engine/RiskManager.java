@@ -4,6 +4,7 @@ import com.turkninja.config.Config;
 import com.turkninja.infra.FuturesBinanceService;
 import com.turkninja.infra.FuturesWebSocketService;
 import com.turkninja.infra.InfluxDBService;
+import com.turkninja.infra.TelegramNotifier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -39,6 +40,7 @@ public class RiskManager {
     private final OrderBookService orderBookService; // For liquidity and wall detection
     private final CorrelationService correlationService; // For correlation risk management
     private final InfluxDBService influxDBService; // Time-series data storage
+    private final TelegramNotifier telegramNotifier; // Telegram notifications
     private final ScheduledExecutorService monitoringExecutor;
     private volatile boolean monitoringActive = false;
 
@@ -76,12 +78,13 @@ public class RiskManager {
 
     public RiskManager(PositionTracker positionTracker, FuturesBinanceService futuresService,
             OrderBookService orderBookService, CorrelationService correlationService,
-            InfluxDBService influxDBService) {
+            InfluxDBService influxDBService, TelegramNotifier telegramNotifier) {
         this.positionTracker = positionTracker;
         this.futuresService = futuresService;
         this.orderBookService = orderBookService;
         this.correlationService = correlationService;
         this.influxDBService = influxDBService;
+        this.telegramNotifier = telegramNotifier;
         this.maxConcurrentPositions = Config.getInt("risk.max_concurrent_positions", 1000);
         this.maxPositionSizeUsdt = Config.getDouble("risk.max_position_size", 1000.0);
         this.dailyLossLimit = Config.getDouble("risk.daily_loss_limit", 500.0);
@@ -135,20 +138,16 @@ public class RiskManager {
 
             // Update highest price if current is higher
             if (currentPrice.compareTo(extremePrice) > 0) {
-                // Only update extreme price if we are above activation OR if we just crossed it
-                if (currentPrice.compareTo(activationPrice) >= 0) {
-                    extremePrices.put(symbol, currentPrice);
+                extremePrices.put(symbol, currentPrice); // Always update extreme price to track ATH
 
+                // Log if this new high activates the trailing stop
+                if (!isActivated && currentPrice.compareTo(activationPrice) >= 0) {
                     BigDecimal grossProfitPct = currentPrice.subtract(entryPrice)
                             .divide(entryPrice, 4, RoundingMode.HALF_UP)
                             .multiply(BigDecimal.valueOf(100));
-                    BigDecimal netProfitPct = grossProfitPct
-                            .subtract(BigDecimal.valueOf(COMMISSION_RATE_ROUND_TRIP * 100));
-
-                    logger.info("🔼 New High for {} LONG: {} (Entry: {}, Net PnL: {}%, Activated: YES)",
-                            symbol, currentPrice, entryPrice, netProfitPct);
+                    logger.info("🚀 Trailing Stop ACTIVATED for {} LONG at {} (Profit: {}%)", symbol, currentPrice,
+                            grossProfitPct);
                 }
-                // Don't return - continue to check stop price even when making new highs
             }
 
             // If not activated yet, rely on fixed Stop Loss in PositionTracker
@@ -159,10 +158,18 @@ public class RiskManager {
             // Calculate Stop Price: High * (1 - trailingPct)
             BigDecimal stopPrice = extremePrice.multiply(BigDecimal.ONE.subtract(trailingPct));
 
+            // [DEBUG] Log trailing stop calculation
+            logger.info("🔍 {} LONG Trailing Stop Check: Current={}, Extreme={}, Stop={}, Entry={}, Trailing%={}",
+                    symbol, currentPrice, extremePrice, stopPrice, entryPrice, trailingPct);
+
             // Use smart stop check with order book intelligence
             double positionSizeUsdt = getPositionSizeUsdt(symbol);
             boolean shouldExit = shouldExitWithOrderBookCheck(
                     symbol, currentPrice, true, stopPrice, positionSizeUsdt);
+
+            // [DEBUG] Log exit decision
+            logger.info("🔍 {} shouldExit={}, normalStopHit={}", symbol, shouldExit,
+                    currentPrice.compareTo(stopPrice) <= 0);
 
             if (shouldExit) {
                 BigDecimal grossProfit = extremePrice.subtract(entryPrice)
@@ -182,19 +189,16 @@ public class RiskManager {
 
             // Update lowest price if current is lower
             if (currentPrice.compareTo(extremePrice) < 0) {
-                if (currentPrice.compareTo(activationPrice) <= 0) {
-                    extremePrices.put(symbol, currentPrice);
+                extremePrices.put(symbol, currentPrice); // Always update extreme price to track ATL
 
+                // Log if this new low activates the trailing stop
+                if (!isActivated && currentPrice.compareTo(activationPrice) <= 0) {
                     BigDecimal grossProfitPct = entryPrice.subtract(currentPrice)
                             .divide(entryPrice, 4, RoundingMode.HALF_UP)
                             .multiply(BigDecimal.valueOf(100));
-                    BigDecimal netProfitPct = grossProfitPct
-                            .subtract(BigDecimal.valueOf(COMMISSION_RATE_ROUND_TRIP * 100));
-
-                    logger.info("🔽 New Low for {} SHORT: {} (Entry: {}, Net PnL: {}%, Activated: YES)",
-                            symbol, currentPrice, entryPrice, netProfitPct);
+                    logger.info("🚀 Trailing Stop ACTIVATED for {} SHORT at {} (Profit: {}%)", symbol, currentPrice,
+                            grossProfitPct);
                 }
-                // Don't return - continue to check stop price even when making new lows
             }
 
             if (!isActivated) {
@@ -285,6 +289,21 @@ public class RiskManager {
             // Update position quantity in Position Tracker
             double newQuantity = position.quantity * (1.0 - closePercent);
             positionTracker.updatePositionQuantity(symbol, newQuantity);
+
+            // Send Telegram notification for Partial TP
+            if (telegramNotifier != null) {
+                String emoji = profitPercent > 0 ? "💰" : "📊";
+                String message = String.format(
+                        "%s PARTIAL TP - %s\n" +
+                                "Side: %s\n" +
+                                "Entry: $%.4f\n" +
+                                "Exit: $%.4f\n" +
+                                "Profit: +%.2f%%\n" +
+                                "Closed: %.0f%% of position",
+                        emoji, symbol, position.side, position.entryPrice, currentPrice,
+                        profitPercent, closePercent * 100);
+                telegramNotifier.sendAlert(TelegramNotifier.AlertLevel.INFO, message);
+            }
 
             // Record to InfluxDB (optional)
             if (influxDBService != null) {
@@ -474,6 +493,31 @@ public class RiskManager {
 
             // Calculate realized P&L
             double pnl = positionTracker.calculateUnrealizedPnL(symbol, currentPrice);
+
+            // Calculate profit percentage
+            double pnlPercent = ((currentPrice - position.entryPrice) / position.entryPrice) * 100;
+            if (position.side.equals("SHORT")) {
+                pnlPercent = -pnlPercent; // Invert for SHORT positions
+            }
+
+            // Send Telegram notification
+            if (telegramNotifier != null) {
+                String emoji = pnl >= 0 ? "✅" : "❌";
+                String pnlSign = pnl >= 0 ? "+" : "";
+                String message = String.format(
+                        "%s POSITION CLOSED - %s\n" +
+                                "Side: %s\n" +
+                                "Entry: $%.4f\n" +
+                                "Exit: $%.4f\n" +
+                                "P&L: %s$%.2f (%s%.2f%%)\n" +
+                                "Reason: %s",
+                        emoji, symbol, position.side, position.entryPrice, currentPrice,
+                        pnlSign, pnl, pnlSign, pnlPercent, reason);
+
+                TelegramNotifier.AlertLevel level = pnl >= 0 ? TelegramNotifier.AlertLevel.INFO
+                        : TelegramNotifier.AlertLevel.WARNING;
+                telegramNotifier.sendAlert(level, message);
+            }
 
             // Calculate position duration
             long durationSeconds = 0;

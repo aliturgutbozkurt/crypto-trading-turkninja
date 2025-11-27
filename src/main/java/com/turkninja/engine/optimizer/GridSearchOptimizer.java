@@ -165,7 +165,8 @@ public class GridSearchOptimizer implements ParameterOptimizer {
                                 mockBinanceService,
                                 orderBookService,
                                 new com.turkninja.engine.CorrelationService(mockBinanceService),
-                                null); // InfluxDBService is null
+                                null, // InfluxDBService is null
+                                null); // TelegramNotifier is null for optimizer
 
                 com.turkninja.engine.PositionTracker positionTracker = new com.turkninja.engine.PositionTracker(
                                 riskManager);

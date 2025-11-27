@@ -242,7 +242,7 @@ public class GeneticOptimizer implements ParameterOptimizer {
         com.turkninja.engine.CorrelationService correlationService = new com.turkninja.engine.CorrelationService(
                 mockBinanceService);
         com.turkninja.engine.RiskManager riskManager = new com.turkninja.engine.RiskManager(null, mockBinanceService,
-                orderBookService, correlationService, null);
+                orderBookService, correlationService, null, null); // null InfluxDB and Telegram
         com.turkninja.engine.PositionTracker positionTracker = new com.turkninja.engine.PositionTracker(riskManager);
         riskManager.setPositionTracker(positionTracker);
 

@@ -311,6 +311,37 @@ public class FuturesWebSocketService {
                         cachedAccountInfo = restApiFormat;
 
                         logger.debug("Account update: totalWalletBalance={}", totalWalletBalance);
+
+                        // *** UPDATE POSITIONS CACHE FROM WEBSOCKET ***
+                        // Parse positions from ACCOUNT_UPDATE event (field "P")
+                        if (accountUpdate.has("P")) {
+                            JSONArray wsPositions = accountUpdate.getJSONArray("P");
+                            JSONArray restApiPositions = new JSONArray();
+
+                            for (int i = 0; i < wsPositions.length(); i++) {
+                                JSONObject wsPos = wsPositions.getJSONObject(i);
+
+                                // Convert WebSocket position format to REST API format
+                                JSONObject restPos = new JSONObject();
+                                restPos.put("symbol", wsPos.getString("s"));
+                                // Parse string values to double for consistency with REST API
+                                restPos.put("positionAmt", Double.parseDouble(wsPos.getString("pa")));
+                                restPos.put("entryPrice", Double.parseDouble(wsPos.getString("ep")));
+                                restPos.put("unRealizedProfit", Double.parseDouble(wsPos.optString("up", "0")));
+                                restPos.put("positionSide", wsPos.optString("ps", "BOTH"));
+
+                                restApiPositions.put(restPos);
+                            }
+
+                            // Update cached positions
+                            cachedPositions = restApiPositions;
+
+                            // Notify position cache listeners (PositionTracker sync)
+                            notifyPositionCacheListeners();
+
+                            logger.info("ACCOUNT_UPDATE: Updated positions cache with {} positions",
+                                    restApiPositions.length());
+                        }
                     }
                     if (accountUpdateListener != null) {
                         accountUpdateListener.accept(json);
@@ -422,20 +453,26 @@ public class FuturesWebSocketService {
      */
     public List<JSONObject> getCachedKlines(String symbol, String interval, int limit) {
         String cacheKey = symbol + "_" + interval;
-        LinkedList<JSONObject> klines = klineCache.get(cacheKey);
-        if (klines == null || klines.isEmpty()) {
-            // Try fallback to just symbol if interval missing (legacy support)
-            if (klineCache.containsKey(symbol)) {
-                klines = klineCache.get(symbol);
-            } else {
-                logger.warn("No cached klines for {}", cacheKey);
-                return Collections.emptyList();
-            }
-        }
 
-        int size = klines.size();
-        int fromIndex = Math.max(0, size - limit);
-        return new ArrayList<>(klines.subList(fromIndex, size));
+        // Synchronize on klineCache to ensure thread safety
+        synchronized (klineCache) {
+            LinkedList<JSONObject> klines = klineCache.get(cacheKey);
+            if (klines == null || klines.isEmpty()) {
+                // Try fallback to just symbol if interval missing (legacy support)
+                if (klineCache.containsKey(symbol)) {
+                    klines = klineCache.get(symbol);
+                } else {
+                    logger.warn("No cached klines for {}", cacheKey);
+                    return Collections.emptyList();
+                }
+            }
+
+            int size = klines.size();
+            int fromIndex = Math.max(0, size - limit);
+            // Return a defensive copy to avoid ConcurrentModificationException during
+            // iteration
+            return new ArrayList<>(klines.subList(fromIndex, size));
+        }
     }
 
     /**

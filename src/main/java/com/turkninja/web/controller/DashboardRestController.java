@@ -179,7 +179,7 @@ public class DashboardRestController {
     }
 
     @PostMapping("/close-position")
-    public String closePosition(@RequestParam String symbol) {
+    public String closePosition(@RequestParam("symbol") String symbol) {
         try {
             if (futuresService != null) {
                 // Close position on Binance

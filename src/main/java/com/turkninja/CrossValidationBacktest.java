@@ -88,7 +88,7 @@ public class CrossValidationBacktest {
                                                 };
 
                                                 RiskManager riskManager = new RiskManager(null, mockService, null,
-                                                                new CorrelationService(realBinanceService), null); // Added
+                                                                new CorrelationService(realBinanceService), null, null); // null InfluxDB and TelegramNotifier
                                                                                                                    // null
                                                                                                                    // for
                                                                                                                    // InfluxDBService

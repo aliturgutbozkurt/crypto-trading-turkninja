@@ -52,9 +52,10 @@ public class App {
             FuturesWebSocketService webSocketService,
             OrderBookService orderBookService,
             CorrelationService correlationService,
-            InfluxDBService influxDBService) {
+            InfluxDBService influxDBService,
+            TelegramNotifier telegramNotifier) {
         RiskManager manager = new RiskManager(null, futuresBinanceService, orderBookService, correlationService,
-                influxDBService);
+                influxDBService, telegramNotifier);
         manager.setWebSocketService(webSocketService);
         return manager;
     }

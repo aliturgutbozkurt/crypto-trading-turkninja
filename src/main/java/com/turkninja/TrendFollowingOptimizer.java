@@ -141,7 +141,7 @@ public class TrendFollowingOptimizer {
 
                 // Initialize Services
                 RiskManager riskManager = new RiskManager(null, mockService, null,
-                        new CorrelationService(realBinanceService), null);
+                        new CorrelationService(realBinanceService), null, null); // null InfluxDB and TelegramNotifier
                 PositionTracker positionTracker = new PositionTracker(riskManager);
                 riskManager.setPositionTracker(positionTracker);
 
