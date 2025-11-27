@@ -164,10 +164,10 @@ public class GridSearchOptimizer implements ParameterOptimizer {
                                 null, // PositionTracker set later
                                 mockBinanceService,
                                 orderBookService,
-                                new com.turkninja.engine.CorrelationService(mockBinanceService));
+                                new com.turkninja.engine.CorrelationService(mockBinanceService),
+                                null); // InfluxDBService is null
 
                 com.turkninja.engine.PositionTracker positionTracker = new com.turkninja.engine.PositionTracker(
-                                null, // TradeRepository (mocked as null)
                                 riskManager);
 
                 riskManager.setPositionTracker(positionTracker);
@@ -201,6 +201,7 @@ public class GridSearchOptimizer implements ParameterOptimizer {
                                 positionTracker,
                                 orderBookService,
                                 telegramNotifier,
+                                null, // InfluxDBService is null
                                 parameters // Pass the parameters!
                 );
 

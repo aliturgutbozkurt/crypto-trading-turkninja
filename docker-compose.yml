@@ -1,0 +1,59 @@
+version: '3.8'
+
+services:
+  # InfluxDB 2.x - Time Series Database
+  influxdb:
+    image: influxdb:2.7
+    container_name: crypto-trading-influxdb
+    restart: unless-stopped
+    ports:
+      - "8086:8086"
+    environment:
+      # Initial setup
+      DOCKER_INFLUXDB_INIT_MODE: setup
+      DOCKER_INFLUXDB_INIT_USERNAME: admin
+      DOCKER_INFLUXDB_INIT_PASSWORD: cryptotrading2024
+      DOCKER_INFLUXDB_INIT_ORG: turkninja
+      DOCKER_INFLUXDB_INIT_BUCKET: trading_data
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: crypto-trading-super-secret-token-change-in-production
+      # Retention policy (30 days for raw data)
+      DOCKER_INFLUXDB_INIT_RETENTION: 30d
+    volumes:
+      - influxdb_data:/var/lib/influxdb2
+      - influxdb_config:/etc/influxdb2
+    networks:
+      - crypto-trading-network
+    healthcheck:
+      test: [ "CMD", "influx", "ping" ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # Grafana - Visualization (Optional)
+  grafana:
+    image: grafana/grafana:10.2.0
+    container_name: crypto-trading-grafana
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    volumes:
+      - grafana_data:/var/lib/grafana
+    networks:
+      - crypto-trading-network
+    depends_on:
+      - influxdb
+
+volumes:
+  influxdb_data:
+    driver: local
+  influxdb_config:
+    driver: local
+  grafana_data:
+    driver: local
+
+networks:
+  crypto-trading-network:
+    driver: bridge

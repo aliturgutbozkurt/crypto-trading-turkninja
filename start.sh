@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Crypto Trading Bot - Start Script
-# This script loads environment variables and starts the application
+# This script starts InfluxDB, Grafana, and the trading application
 
 # Get the directory where this script is located
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
@@ -26,10 +26,33 @@ if [ -z "$BINANCE_API_KEY" ] || [ -z "$BINANCE_SECRET_KEY" ]; then
 fi
 
 echo "✅ Environment variables loaded successfully"
+echo ""
+
+# Start InfluxDB and Grafana with Docker Compose
+echo "🐳 Starting InfluxDB and Grafana containers..."
+docker-compose up -d
+
+# Wait for InfluxDB to be ready
+echo "⏳ Waiting for InfluxDB to be ready..."
+sleep 3
+
+# Check if containers are running
+if docker ps | grep -q "crypto-trading-influxdb"; then
+    echo "✅ InfluxDB is running on http://localhost:8086"
+else
+    echo "⚠️  Warning: InfluxDB container may not be running properly"
+fi
+
+if docker ps | grep -q "crypto-trading-grafana"; then
+    echo "✅ Grafana is running on http://localhost:3000"
+else
+    echo "⚠️  Warning: Grafana container may not be running properly"
+fi
+
+echo ""
 echo "🚀 Starting Crypto Trading Bot..."
 echo ""
 
-# Start the application
 # Add local Maven to PATH if it exists
 if [ -d "/tmp/apache-maven-3.9.6/bin" ]; then
     export PATH=/tmp/apache-maven-3.9.6/bin:$PATH
@@ -38,3 +61,4 @@ fi
 
 # Start the application and log to file
 mvn clean spring-boot:run | tee startup_log.txt
+

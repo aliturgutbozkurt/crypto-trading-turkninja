@@ -171,7 +171,7 @@ public class TelegramNotifier {
     /**
      * Send raw message to Telegram with security checks (Phase 5.2)
      */
-    private void sendMessage(String text) {
+    protected void sendMessage(String text) {
         // Security: Validate chat ID is in whitelist
         if (!isWhitelisted(chatId)) {
             logger.warn("⚠️ Attempted to send message to non-whitelisted chat ID: {}", chatId);

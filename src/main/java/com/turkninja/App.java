@@ -3,8 +3,6 @@ package com.turkninja;
 import com.turkninja.config.Config;
 import com.turkninja.engine.*;
 import com.turkninja.infra.*;
-import com.turkninja.infra.repository.AccountRepository;
-import com.turkninja.infra.repository.TradeRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.CommandLineRunner;
@@ -18,23 +16,6 @@ public class App {
 
     public static void main(String[] args) {
         SpringApplication.run(App.class, args);
-    }
-
-    @Bean
-    public DatabaseService databaseService() {
-        return new DatabaseService(
-                Config.get(Config.MONGODB_URI, "mongodb://localhost:27017"),
-                Config.get(Config.DB_NAME, "crypto_trading"));
-    }
-
-    @Bean
-    public AccountRepository accountRepository(DatabaseService databaseService) {
-        return new AccountRepository(databaseService);
-    }
-
-    @Bean
-    public TradeRepository tradeRepository(DatabaseService databaseService) {
-        return new TradeRepository(databaseService);
     }
 
     @Bean
@@ -70,15 +51,17 @@ public class App {
     public RiskManager riskManager(FuturesBinanceService futuresBinanceService,
             FuturesWebSocketService webSocketService,
             OrderBookService orderBookService,
-            CorrelationService correlationService) {
-        RiskManager manager = new RiskManager(null, futuresBinanceService, orderBookService, correlationService);
+            CorrelationService correlationService,
+            InfluxDBService influxDBService) {
+        RiskManager manager = new RiskManager(null, futuresBinanceService, orderBookService, correlationService,
+                influxDBService);
         manager.setWebSocketService(webSocketService);
         return manager;
     }
 
     @Bean
-    public PositionTracker positionTracker(TradeRepository tradeRepository, RiskManager riskManager) {
-        PositionTracker tracker = new PositionTracker(tradeRepository, riskManager);
+    public PositionTracker positionTracker(RiskManager riskManager) {
+        PositionTracker tracker = new PositionTracker(riskManager);
         // Circular dependency resolution: set tracker on risk manager
         riskManager.setPositionTracker(tracker);
         return tracker;
@@ -95,20 +78,17 @@ public class App {
     }
 
     @Bean
-    public StrategyEngine strategyEngine(FuturesBinanceService futuresBinanceService,
-            FuturesWebSocketService webSocketService, IndicatorService indicatorService, RiskManager riskManager,
-            PositionTracker positionTracker, OrderBookService orderBookService,
-            TelegramNotifier telegramNotifier) {
-        return new StrategyEngine(webSocketService, futuresBinanceService, indicatorService, riskManager,
-                positionTracker, orderBookService, telegramNotifier);
+    public InfluxDBService influxDBService() {
+        return new InfluxDBService();
     }
 
     @Bean
-    public CommandLineRunner startSynchronizationService(SynchronizationService syncService) {
-        return args -> {
-            syncService.start();
-            logger.info("🔄 Synchronization Service started");
-        };
+    public StrategyEngine strategyEngine(FuturesBinanceService futuresBinanceService,
+            FuturesWebSocketService webSocketService, IndicatorService indicatorService, RiskManager riskManager,
+            PositionTracker positionTracker, OrderBookService orderBookService,
+            TelegramNotifier telegramNotifier, InfluxDBService influxDBService) {
+        return new StrategyEngine(webSocketService, futuresBinanceService, indicatorService, riskManager,
+                positionTracker, orderBookService, telegramNotifier, influxDBService);
     }
 
     @Bean
@@ -140,11 +120,5 @@ public class App {
                     Config.get("strategy.mode", "HYBRID"),
                     Config.get(Config.DRY_RUN, "false"));
         };
-    }
-
-    @Bean
-    public SynchronizationService synchronizationService(FuturesBinanceService futuresBinanceService,
-            AccountRepository accountRepository) {
-        return new SynchronizationService(futuresBinanceService, accountRepository);
     }
 }

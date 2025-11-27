@@ -1,12 +1,19 @@
 #!/bin/bash
 
 # Crypto Trading Bot - Stop Script
-# This script stops all running instances of the application
+# This script stops the application and Docker containers
 
 echo "🛑 Stopping Crypto Trading Bot..."
 
-# Also kill any Java processes running the app
+# Kill any Java processes running the app
 pkill -f "spring-boot:run"
 pkill -f "com.turkninja.App"
 
-echo "✅ All bot processes stopped"
+echo "✅ Application processes stopped"
+
+# Stop Docker containers
+echo "🐳 Stopping InfluxDB and Grafana containers..."
+docker-compose down
+
+echo "✅ All services stopped successfully"
+

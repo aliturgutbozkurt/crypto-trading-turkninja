@@ -139,27 +139,28 @@ public class TrendFollowingOptimizer {
                     }
                 };
 
+                // Initialize Services
                 RiskManager riskManager = new RiskManager(null, mockService, null,
-                        new CorrelationService(realBinanceService));
-                PositionTracker positionTracker = new PositionTracker(null, riskManager);
+                        new CorrelationService(realBinanceService), null);
+                PositionTracker positionTracker = new PositionTracker(riskManager);
                 riskManager.setPositionTracker(positionTracker);
 
                 TelegramNotifier mockTelegram = new TelegramNotifier() {
+                    @Override
                     public void sendMessage(String message) {
-                    }
-
-                    public void sendAlert(AlertLevel level, String message) {
+                        // Suppress messages during optimization
                     }
                 };
 
-                StrategyEngine strategyEngine = new StrategyEngine(
-                        mockWebSocketService, mockService, indicatorService,
-                        riskManager, positionTracker, null, mockTelegram);
+                // Initialize Strategy Engine
+                StrategyEngine engine = new StrategyEngine(mockWebSocketService, mockService, indicatorService,
+                        riskManager,
+                        positionTracker, null, mockTelegram, null);
 
-                strategyEngine.setAsyncExecution(false);
+                engine.setAsyncExecution(false);
 
                 BacktestEngine backtestEngine = new BacktestEngine(
-                        strategyEngine, mockService, realBinanceService, indicatorService);
+                        engine, mockService, realBinanceService, indicatorService);
 
                 BacktestReport report = backtestEngine.runBacktest(symbol, startDate, endDate, "5m");
 

@@ -218,16 +218,6 @@ public class GeneticOptimizer implements ParameterOptimizer {
         com.turkninja.infra.MockFuturesBinanceService mockBinanceService = new com.turkninja.infra.MockFuturesBinanceService(
                 1000.0, 0.001, 0.001);
 
-        // Initialize RiskManager and PositionTracker
-        com.turkninja.engine.RiskManager riskManager = new com.turkninja.engine.RiskManager(
-                null, mockBinanceService, orderBookService,
-                new com.turkninja.engine.CorrelationService(mockBinanceService));
-
-        com.turkninja.engine.PositionTracker positionTracker = new com.turkninja.engine.PositionTracker(
-                null, riskManager);
-
-        riskManager.setPositionTracker(positionTracker);
-
         // Mock WebSocket Service
         FuturesWebSocketService mockWebSocketService = new FuturesWebSocketService("mockKey", "mockSecret") {
             @Override
@@ -248,10 +238,18 @@ public class GeneticOptimizer implements ParameterOptimizer {
             }
         };
 
-        // Create Strategy Engine
+        // Initialize Services
+        com.turkninja.engine.CorrelationService correlationService = new com.turkninja.engine.CorrelationService(
+                mockBinanceService);
+        com.turkninja.engine.RiskManager riskManager = new com.turkninja.engine.RiskManager(null, mockBinanceService,
+                orderBookService, correlationService, null);
+        com.turkninja.engine.PositionTracker positionTracker = new com.turkninja.engine.PositionTracker(riskManager);
+        riskManager.setPositionTracker(positionTracker);
+
+        // Initialize Strategy Engine
         com.turkninja.engine.StrategyEngine strategyEngine = new com.turkninja.engine.StrategyEngine(
                 mockWebSocketService, mockBinanceService, indicatorService, riskManager,
-                positionTracker, orderBookService, telegramNotifier, params);
+                positionTracker, orderBookService, telegramNotifier, null, params);
 
         // Disable async execution for backtesting (CRITICAL for correct results)
         strategyEngine.setAsyncExecution(false);

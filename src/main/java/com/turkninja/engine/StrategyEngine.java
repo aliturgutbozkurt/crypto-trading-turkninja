@@ -4,6 +4,7 @@ import com.turkninja.engine.criteria.*;
 import com.turkninja.infra.FuturesBinanceService;
 import com.turkninja.infra.FuturesWebSocketService;
 import com.turkninja.infra.TelegramNotifier;
+import com.turkninja.infra.InfluxDBService;
 import com.turkninja.model.optimizer.ParameterSet;
 import com.turkninja.web.service.WebSocketPushService;
 import com.turkninja.web.dto.SignalDTO;
@@ -45,6 +46,7 @@ public class StrategyEngine {
                                                                                              // Reversion
 
     private final TelegramNotifier telegram;
+    private final InfluxDBService influxDBService; // Time-series data storage
     private WebSocketPushService webSocketPushService; // Optional, for UI notifications
 
     // Trading symbols - Expanded to all major coins (per user request)
@@ -77,9 +79,10 @@ public class StrategyEngine {
             RiskManager riskManager,
             PositionTracker positionTracker,
             OrderBookService orderBookService,
-            TelegramNotifier telegramNotifier) {
+            TelegramNotifier telegramNotifier,
+            InfluxDBService influxDBService) {
         this(webSocketService, binanceService, indicatorService, riskManager, positionTracker, orderBookService,
-                telegramNotifier, new ParameterSet());
+                telegramNotifier, influxDBService, new ParameterSet());
     }
 
     public StrategyEngine(FuturesWebSocketService webSocketService,
@@ -89,6 +92,7 @@ public class StrategyEngine {
             PositionTracker positionTracker,
             OrderBookService orderBookService,
             TelegramNotifier telegramNotifier,
+            InfluxDBService influxDBService,
             ParameterSet parameters) {
         this.webSocketService = webSocketService;
         this.futuresService = binanceService; // Renamed from binanceService to futuresService to match field
@@ -97,6 +101,7 @@ public class StrategyEngine {
         this.positionTracker = positionTracker;
         this.orderBookService = orderBookService;
         this.telegram = telegramNotifier; // Renamed from telegramNotifier to telegram to match field
+        this.influxDBService = influxDBService;
 
         this.multiTimeframeService = new MultiTimeframeService(webSocketService, indicatorService); // Kept
                                                                                                     // webSocketService
@@ -670,15 +675,20 @@ public class StrategyEngine {
             // 7. Track Position (Only if successful)
             positionTracker.trackPosition(symbol, side, price, quantity);
 
-            // 8. Send Telegram Notification (Only if successful)
+            // 8. Record trade to InfluxDB
+            if (influxDBService != null && influxDBService.isEnabled()) {
+                influxDBService.writeTrade(symbol, side, price, quantity, positionSize, java.time.Instant.now());
+            }
+
+            // 9. Send Telegram Notification (Only if successful)
             if (telegram != null && telegram.isEnabled()) {
                 telegram.notifyPositionOpened(symbol, side, price, quantity, positionSize);
             }
 
-            // 9. Update Signal Status to EXECUTED
+            // 10. Update Signal Status to EXECUTED
             pushSignal(symbol, side, "Trade Executed Successfully", price, true, "EXECUTED");
 
-            // 10. Alert: Sound + Red console output
+            // 11. Alert: Sound + Red console output
             System.out.print("\007"); // System beep
             String redColor = "\u001B[31m";
             String resetColor = "\u001B[0m";
@@ -923,6 +933,11 @@ public class StrategyEngine {
         recentSignals.add(0, signal);
         if (recentSignals.size() > 50) {
             recentSignals.remove(recentSignals.size() - 1);
+        }
+
+        // Record signal to InfluxDB
+        if (influxDBService != null && influxDBService.isEnabled()) {
+            influxDBService.writeSignal(symbol, type, reason, price, executed, status, java.time.Instant.now());
         }
 
         if (webSocketPushService != null) {

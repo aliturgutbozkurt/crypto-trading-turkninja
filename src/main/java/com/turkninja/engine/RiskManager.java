@@ -3,6 +3,7 @@ package com.turkninja.engine;
 import com.turkninja.config.Config;
 import com.turkninja.infra.FuturesBinanceService;
 import com.turkninja.infra.FuturesWebSocketService;
+import com.turkninja.infra.InfluxDBService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -31,6 +32,7 @@ public class RiskManager {
     private FuturesWebSocketService webSocketService; // For cached mark prices
     private final OrderBookService orderBookService; // For liquidity and wall detection
     private final CorrelationService correlationService; // For correlation risk management
+    private final InfluxDBService influxDBService; // Time-series data storage
     private final ScheduledExecutorService monitoringExecutor;
     private volatile boolean monitoringActive = false;
 
@@ -62,11 +64,13 @@ public class RiskManager {
     private final int minPositionsForCorrelation;
 
     public RiskManager(PositionTracker positionTracker, FuturesBinanceService futuresService,
-            OrderBookService orderBookService, CorrelationService correlationService) {
+            OrderBookService orderBookService, CorrelationService correlationService,
+            InfluxDBService influxDBService) {
         this.positionTracker = positionTracker;
         this.futuresService = futuresService;
         this.orderBookService = orderBookService;
         this.correlationService = correlationService;
+        this.influxDBService = influxDBService;
         this.maxConcurrentPositions = Config.getInt("risk.max_concurrent_positions", 1000);
         this.maxPositionSizeUsdt = Config.getDouble("risk.max_position_size", 1000.0);
         this.dailyLossLimit = Config.getDouble("risk.daily_loss_limit", 500.0);
@@ -383,6 +387,20 @@ public class RiskManager {
 
             // Calculate realized P&L
             double pnl = positionTracker.calculateUnrealizedPnL(symbol, currentPrice);
+
+            // Calculate position duration
+            long durationSeconds = 0;
+            if (position.entryTime != null) {
+                durationSeconds = (System.currentTimeMillis()
+                        - java.time.Instant.parse(position.entryTime).toEpochMilli()) / 1000;
+            }
+
+            // Record position close to InfluxDB
+            if (influxDBService != null && influxDBService.isEnabled()) {
+                influxDBService.writePositionClose(symbol, position.side, currentPrice, pnl, reason,
+                        durationSeconds, java.time.Instant.now());
+            }
+
             if (pnl < 0) {
                 dailyLoss += Math.abs(pnl);
                 logger.warn("Daily loss updated: ${} / ${}", dailyLoss, dailyLossLimit);

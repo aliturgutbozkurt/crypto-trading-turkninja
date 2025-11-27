@@ -1,8 +1,6 @@
 package com.turkninja.engine;
 
 import com.turkninja.config.Config;
-import com.turkninja.infra.repository.TradeRepository;
-import org.bson.Document;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -17,7 +15,6 @@ import java.util.concurrent.ConcurrentHashMap;
 public class PositionTracker {
     private static final Logger logger = LoggerFactory.getLogger(PositionTracker.class);
 
-    private final TradeRepository tradeRepository;
     private final RiskManager riskManager;
     private KellyPositionSizer kellyPositionSizer; // Optional: for dynamic position sizing
     private final Map<String, Position> activePositions = new ConcurrentHashMap<>();
@@ -31,8 +28,7 @@ public class PositionTracker {
     // Commission Rate (0.04% Entry + 0.04% Exit = 0.08%)
     private final double COMMISSION_RATE = 0.0008;
 
-    public PositionTracker(TradeRepository tradeRepository, RiskManager riskManager) {
-        this.tradeRepository = tradeRepository;
+    public PositionTracker(RiskManager riskManager) {
         this.riskManager = riskManager;
 
         // Load TP/SL/Trailing from config
@@ -55,9 +51,6 @@ public class PositionTracker {
 
         // Register with RiskManager for Trailing Stop
         riskManager.registerPosition(symbol, BigDecimal.valueOf(entryPrice), BigDecimal.valueOf(trailingStopPercent));
-
-        // Persist to MongoDB
-        savePositionToDb(position);
 
         logger.info("Tracking position: {} {} @ {} x{} (TP: +{}%, SL: -{}%)",
                 side, symbol, entryPrice, quantity,
@@ -133,8 +126,6 @@ public class PositionTracker {
                 logger.debug("📊 Kelly: Recorded trade {} - Win: {}, Ratio: {:.4f}",
                         symbol, isWin, profitRatio);
             }
-
-            updatePositionInDb(position, "CLOSED", exitPrice, pnl);
 
             // Also clear from RiskManager
             riskManager.clearPosition(symbol);
@@ -243,42 +234,6 @@ public class PositionTracker {
     }
 
     /**
-     * Save position to MongoDB
-     */
-    private void savePositionToDb(Position position) {
-        try {
-            if (tradeRepository == null)
-                return; // Skip if no DB (e.g. backtest)
-
-            Document doc = new Document()
-                    .append("symbol", position.symbol)
-                    .append("side", position.side)
-                    .append("entryPrice", position.entryPrice)
-                    .append("quantity", position.quantity)
-                    .append("entryTime", position.entryTime)
-                    .append("status", "OPEN");
-
-            tradeRepository.saveTrade(doc);
-        } catch (Exception e) {
-            logger.error("Failed to save position to DB", e);
-        }
-    }
-
-    /**
-     * Update position status in MongoDB
-     */
-    private void updatePositionInDb(Position position, String status, double exitPrice, double pnl) {
-        try {
-            if (tradeRepository == null)
-                return; // Skip if no DB (e.g. backtest)
-
-            tradeRepository.updateTrade(position.symbol, exitPrice, pnl, status);
-        } catch (Exception e) {
-            logger.error("Failed to update position in DB", e);
-        }
-    }
-
-    /**
      * Position data class
      */
     public static class Position {
@@ -304,10 +259,6 @@ public class PositionTracker {
         HOLD,
         CLOSE_STOP_LOSS,
         CLOSE_TAKE_PROFIT
-    }
-
-    public TradeRepository getTradeRepository() {
-        return tradeRepository;
     }
 
     /**

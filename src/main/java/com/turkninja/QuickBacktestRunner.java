@@ -78,13 +78,10 @@ public class QuickBacktestRunner {
 
             // 3. Initialize Dependencies with Circular Dependency Resolution
 
-            // Step A: Create RiskManager with null PositionTracker
-            RiskManager riskManager = new RiskManager(null, mockService, mockOrderBookService, correlationService);
-
-            // Step B: Create PositionTracker with RiskManager
-            PositionTracker positionTracker = new PositionTracker(null, riskManager);
-
-            // Step C: Update RiskManager with PositionTracker
+            // Step A: Create RiskManager // Initialize Services
+            RiskManager riskManager = new RiskManager(null, mockService, mockOrderBookService, correlationService,
+                    null);
+            PositionTracker positionTracker = new PositionTracker(riskManager);
             riskManager.setPositionTracker(positionTracker);
 
             // Mock Telegram
@@ -104,7 +101,8 @@ public class QuickBacktestRunner {
                     riskManager,
                     positionTracker,
                     mockOrderBookService,
-                    mockTelegram);
+                    mockTelegram,
+                    null);
 
             // Disable async execution for backtest (CRITICAL for correct simulation)
             strategyEngine.setAsyncExecution(false);

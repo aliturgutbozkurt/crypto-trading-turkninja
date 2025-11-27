@@ -6,7 +6,7 @@ import com.turkninja.engine.StrategyEngine;
 import com.turkninja.engine.OrderBookService;
 import com.turkninja.infra.FuturesBinanceService;
 import com.turkninja.infra.FuturesWebSocketService;
-import com.turkninja.infra.SynchronizationService;
+
 import com.turkninja.web.service.WebSocketPushService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -27,7 +27,6 @@ public class AppStartupRunner implements CommandLineRunner {
     private final PositionTracker positionTracker;
     private final RiskManager riskManager;
     private final StrategyEngine strategyEngine;
-    private final SynchronizationService syncService;
     private final OrderBookService orderBookService;
     private final WebSocketPushService webSocketPushService;
 
@@ -36,7 +35,6 @@ public class AppStartupRunner implements CommandLineRunner {
             PositionTracker positionTracker,
             RiskManager riskManager,
             StrategyEngine strategyEngine,
-            SynchronizationService syncService,
             OrderBookService orderBookService,
             WebSocketPushService webSocketPushService) {
         this.futuresBinanceService = futuresBinanceService;
@@ -44,7 +42,6 @@ public class AppStartupRunner implements CommandLineRunner {
         this.positionTracker = positionTracker;
         this.riskManager = riskManager;
         this.strategyEngine = strategyEngine;
-        this.syncService = syncService;
         this.orderBookService = orderBookService;
         this.webSocketPushService = webSocketPushService;
     }
@@ -142,10 +139,6 @@ public class AppStartupRunner implements CommandLineRunner {
             List<String> symbols = strategyEngine.getTradingSymbols();
             webSocketService.startMarkPriceStream(symbols.toArray(new String[0]));
             logger.info("Started Mark Price Stream for {} symbols", symbols.size());
-
-            // Start Sync
-            syncService.start();
-            logger.info("Sync service started");
 
             // Start Risk Manager monitoring
             riskManager.startMonitoring();
