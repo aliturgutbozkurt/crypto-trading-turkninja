@@ -18,6 +18,6 @@ public class WebSocketConfig implements WebSocketConfigurer {
     @Override
     public void registerWebSocketHandlers(WebSocketHandlerRegistry registry) {
         registry.addHandler(dashboardWebSocketHandler, "/ws-stream")
-                .setAllowedOrigins("*");
+                .setAllowedOriginPatterns("*"); // Better compatibility than setAllowedOrigins("*")
     }
 }

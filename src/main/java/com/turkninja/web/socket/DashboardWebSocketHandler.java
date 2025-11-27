@@ -18,22 +18,30 @@ public class DashboardWebSocketHandler extends TextWebSocketHandler {
     @Override
     public void afterConnectionEstablished(WebSocketSession session) throws Exception {
         sessions.add(session);
+        System.out.println("🔌 WebSocket connected: " + session.getId() + " | Total: " + sessions.size());
     }
 
     @Override
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) throws Exception {
         sessions.remove(session);
+        System.out.println("🔌 WebSocket disconnected: " + session.getId() + " | Total: " + sessions.size());
     }
 
     public void broadcast(String message) {
+        int sent = 0;
         for (WebSocketSession session : sessions) {
             if (session.isOpen()) {
                 try {
                     session.sendMessage(new TextMessage(message));
+                    sent++;
                 } catch (IOException e) {
-                    // Ignore send errors
+                    System.err.println("❌ Failed to send to session: " + session.getId());
                 }
             }
+        }
+        // Log occasionally
+        if (Math.random() < 0.01) {
+            System.out.println("📤 Broadcast to " + sent + " sessions");
         }
     }
 }

@@ -40,7 +40,6 @@ public class DashboardRestController {
     @GetMapping("/positions")
     public List<PositionDTO> getPositions() {
         List<PositionDTO> positions = new ArrayList<>();
-
         try {
             JSONArray positionsArray = webSocketService.getCachedPositions();
             JSONObject account = webSocketService.getCachedAccountInfo();
@@ -206,5 +205,13 @@ public class DashboardRestController {
         } catch (Exception e) {
             return "Error: " + e.getMessage();
         }
+    }
+
+    @GetMapping("/signals")
+    public List<com.turkninja.web.dto.SignalDTO> getSignals() {
+        if (strategyEngine != null) {
+            return strategyEngine.getRecentSignals();
+        }
+        return new ArrayList<>();
     }
 }

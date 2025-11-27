@@ -9,8 +9,8 @@
         <appender-ref ref="STDOUT" />
     </root>
 
-    <!-- Reduce verbosity for optimization -->
-    <logger name="com.turkninja" level="ERROR" />
+    <!-- Application logs - INFO to see important trading events -->
+    <logger name="com.turkninja" level="INFO" />
     <logger name="com.turkninja.engine.optimizer" level="INFO" />
     <logger name="com.turkninja.OptimizerRunner" level="INFO" />
 </configuration>

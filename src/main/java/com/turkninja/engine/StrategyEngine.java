@@ -301,6 +301,10 @@ public class StrategyEngine {
         } else {
             logger.info("⚠️ Batch mode DISABLED - using immediate execution");
         }
+
+        // Add a test signal to verify UI integration
+        pushSignal("BTCUSDT", "INFO", "System Started - Monitoring markets for trading opportunities", 0.0, false,
+                "SYSTEM");
     }
 
     public void stopAutomatedTrading() {
@@ -456,6 +460,7 @@ public class StrategyEngine {
                 longPassed = false;
                 longFailReason = filter.getFailureReason(symbol, series5m, indicators5m, currentPrice, true);
                 logger.info("⏸️ {} LONG filtered by: {} Reason: {}", symbol, filter.getFilterName(), longFailReason);
+                pushSignal(symbol, "BUY", "Blocked: " + longFailReason, currentPrice, false, "BLOCKED");
                 break;
             }
         }
@@ -463,12 +468,15 @@ public class StrategyEngine {
         if (longPassed) {
             if (btcTrend.equals("BEARISH")) {
                 logger.info("⏸️ {} LONG filtered - BTC trend bearish", symbol);
+                pushSignal(symbol, "BUY", "Blocked: BTC Trend Bearish", currentPrice, false, "BLOCKED");
                 longPassed = false;
             } else if (!multiTimeframeService.allowLong(symbol)) {
                 logger.info("⏸️ {} LONG filtered - MTF bearish", symbol);
+                pushSignal(symbol, "BUY", "Blocked: MTF Bearish", currentPrice, false, "BLOCKED");
                 longPassed = false;
             } else if (orderBookService != null && !orderBookService.confirmBuySignal(symbol, currentPrice)) {
                 logger.info("⏸️ {} LONG filtered - OrderBook imbalance", symbol);
+                pushSignal(symbol, "BUY", "Blocked: OrderBook Imbalance", currentPrice, false, "BLOCKED");
                 longPassed = false;
             }
         }
@@ -495,6 +503,7 @@ public class StrategyEngine {
                 shortPassed = false;
                 shortFailReason = filter.getFailureReason(symbol, series5m, indicators5m, currentPrice, false);
                 logger.info("⏸️ {} SHORT filtered by: {} Reason: {}", symbol, filter.getFilterName(), shortFailReason);
+                pushSignal(symbol, "SELL", "Blocked: " + shortFailReason, currentPrice, false, "BLOCKED");
                 break;
             }
         }
@@ -502,12 +511,15 @@ public class StrategyEngine {
         if (shortPassed) {
             if (btcTrend.equals("BULLISH")) {
                 logger.info("⏸️ {} SHORT filtered - BTC trend bullish", symbol);
+                pushSignal(symbol, "SELL", "Blocked: BTC Trend Bullish", currentPrice, false, "BLOCKED");
                 shortPassed = false;
             } else if (!multiTimeframeService.allowShort(symbol)) {
                 logger.info("⏸️ {} SHORT filtered - MTF bullish", symbol);
+                pushSignal(symbol, "SELL", "Blocked: MTF Bullish", currentPrice, false, "BLOCKED");
                 shortPassed = false;
             } else if (orderBookService != null && !orderBookService.confirmSellSignal(symbol, currentPrice)) {
                 logger.info("⏸️ {} SHORT filtered - OrderBook imbalance", symbol);
+                pushSignal(symbol, "SELL", "Blocked: OrderBook Imbalance", currentPrice, false, "BLOCKED");
                 shortPassed = false;
             }
         }
@@ -895,10 +907,26 @@ public class StrategyEngine {
     /**
      * Push trading signal to UI via WebSocket (if connected)
      */
+    // Store recent signals for UI polling (in case WebSocket fails)
+    private final List<SignalDTO> recentSignals = new java.util.concurrent.CopyOnWriteArrayList<>();
+
+    public List<SignalDTO> getRecentSignals() {
+        return recentSignals;
+    }
+
     private void pushSignal(String symbol, String type, String reason, double price, boolean executed, String status) {
+        // Create the signal DTO (Matches existing constructor: symbol, type, reason,
+        // price, executed, status)
+        SignalDTO signal = new SignalDTO(symbol, type, reason, price, executed, status);
+
+        // Add to recent list (keep last 50)
+        recentSignals.add(0, signal);
+        if (recentSignals.size() > 50) {
+            recentSignals.remove(recentSignals.size() - 1);
+        }
+
         if (webSocketPushService != null) {
             try {
-                SignalDTO signal = new SignalDTO(symbol, type, reason, price, executed, status);
                 webSocketPushService.pushSignal(signal);
             } catch (Exception e) {
                 logger.error("Failed to push signal to UI", e);

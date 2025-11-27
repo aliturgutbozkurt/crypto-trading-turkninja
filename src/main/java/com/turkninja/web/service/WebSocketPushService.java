@@ -37,7 +37,14 @@ public class WebSocketPushService {
         // We fetch the latest DTOs from the controller logic which uses the cache
         scheduler.scheduleAtFixedRate(() -> {
             try {
-                if (binanceWebSocketService.isCacheReady()) {
+                boolean cacheReady = binanceWebSocketService.isCacheReady();
+
+                // Log every 4 seconds (16 iterations at 250ms)
+                if (Math.random() < 0.0625) { // ~1/16 chance
+                    System.out.println("📡 WebSocket Push - Cache Ready: " + cacheReady);
+                }
+
+                if (cacheReady) {
                     List<PositionDTO> positions = restController.getPositions();
                     AccountDTO account = restController.getAccount();
 
@@ -47,6 +54,11 @@ public class WebSocketPushService {
                     update.put("account", new JSONObject(account));
 
                     dashboardWebSocketHandler.broadcast(update.toString());
+
+                    // Log successful pushes occasionally
+                    if (Math.random() < 0.01) {
+                        System.out.println("✅ Pushed update: " + positions.size() + " positions");
+                    }
                 }
             } catch (Exception e) {
                 e.printStackTrace();

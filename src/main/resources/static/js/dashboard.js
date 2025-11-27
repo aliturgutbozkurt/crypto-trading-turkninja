@@ -8,24 +8,49 @@ document.addEventListener('DOMContentLoaded', function () {
     loadPositions();
     connectWebSocket();
 
-    // Auto-reload positions every 10 seconds as requested
-    setInterval(reloadPositions, 10000);
+    // Auto-reload data every 1 second (Polling fallback)
+    setInterval(loadData, 1000);
 });
+
+// Wrapper to load both account and positions
+function loadData() {
+    loadAccount();
+    loadPositions();
+    loadSignals(); // Poll signals as well
+}
+
+// Load signals via REST (Fallback for WebSocket)
+async function loadSignals() {
+    try {
+        const response = await fetch('/api/signals');
+        const signals = await response.json();
+
+        // Clear existing list to avoid duplicates (simple approach)
+        const signalsList = document.getElementById('signalsList');
+        signalsList.innerHTML = '';
+
+        // Add signals in reverse order (newest first)
+        signals.forEach(signal => addSignal(signal));
+    } catch (error) {
+        console.error('Error loading signals:', error);
+    }
+}
 
 function connectWebSocket() {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const wsUrl = protocol + '//' + window.location.host + '/ws-stream';
 
-    console.log('Connecting to WebSocket:', wsUrl);
+    console.log('🔌 Connecting to WebSocket:', wsUrl);
     socket = new WebSocket(wsUrl);
 
     socket.onopen = function () {
-        console.log('WebSocket Connected');
+        console.log('✅ WebSocket Connected');
         document.getElementById('lastUpdate').textContent = 'Live (Connected)';
         document.getElementById('lastUpdate').style.color = '#27ae60';
     };
 
     socket.onmessage = function (event) {
+        // console.log('📩 WS Message:', event.data.length + ' bytes'); // Debug log
         try {
             const data = JSON.parse(event.data);
             if (data.type === 'UPDATE') {
@@ -34,19 +59,25 @@ function connectWebSocket() {
                 addSignal(data.signal);
             }
         } catch (e) {
-            console.error('Error parsing WebSocket message:', e);
+            console.error('❌ Error parsing WebSocket message:', e);
         }
     };
 
-    socket.onclose = function () {
-        console.log('WebSocket Disconnected. Reconnecting in 3s...');
+    socket.onclose = function (event) {
+        console.log('⚠️ WebSocket Disconnected (Code: ' + event.code + '). Reconnecting in 3s...');
         document.getElementById('lastUpdate').textContent = 'Disconnected (Reconnecting...)';
         document.getElementById('lastUpdate').style.color = '#e74c3c';
+
+        // Clear socket reference
+        socket = null;
+
+        // Reconnect after delay
         setTimeout(connectWebSocket, 3000);
     };
 
     socket.onerror = function (error) {
-        console.error('WebSocket Error:', error);
+        console.error('❌ WebSocket Error:', error);
+        // On error, close is usually called automatically, triggering reconnection
     };
 }
 
@@ -67,7 +98,7 @@ function updateDashboard(data) {
         const tbody = document.getElementById('positionsBody');
         const positions = data.positions;
 
-        if (positions.length === 0) {
+        if (!positions || positions.length === 0) {
             tbody.innerHTML = '<tr><td colspan="9" class="no-data">No active positions. Strategy is scanning...</td></tr>';
         } else {
             // Simple full redraw for now (can be optimized later if needed)
@@ -215,7 +246,7 @@ function addSignal(signal) {
             <span class="signal-time">${time}</span>
         </div>
         <div class="signal-details">
-            <div class="signal-price">$${signal.price.toFixed(2)}</div>
+            ${signal.type !== 'INFO' ? `<div class="signal-price">$${signal.price.toFixed(2)}</div>` : ''}
             <div class="signal-reason">${signal.reason}</div>
         </div>
     `;
@@ -226,8 +257,8 @@ function addSignal(signal) {
     // Animate entrance
     setTimeout(() => signalEl.classList.add('show'), 10);
 
-    // Keep only last 20 signals
-    while (signalsList.children.length > 20) {
+    // Keep only last 50 signals
+    while (signalsList.children.length > 50) {
         signalsList.removeChild(signalsList.lastChild);
     }
 }

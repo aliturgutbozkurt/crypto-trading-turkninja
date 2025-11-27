@@ -283,7 +283,11 @@ public class FuturesBinanceService {
 
     public String getPositionInfo() {
         try {
-            return signedRequest("GET", "/fapi/v2/positionRisk", new LinkedHashMap<>());
+            String response = signedRequest("GET", "/fapi/v2/positionRisk", new LinkedHashMap<>());
+            logger.info("DEBUG: Position Info Response Length: {}", response.length());
+            // logger.info("DEBUG: Position Info Response: {}", response); // Keep full log
+            // commented to avoid spam, length is enough for now
+            return response;
         } catch (Exception e) {
             logger.error("Failed to get position info", e);
             return "[]";

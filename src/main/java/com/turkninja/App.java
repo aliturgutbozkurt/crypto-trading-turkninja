@@ -42,6 +42,10 @@ public class App {
         FuturesBinanceService service = new FuturesBinanceService();
         boolean dryRun = Boolean.parseBoolean(Config.get(Config.DRY_RUN, "false"));
         service.setDryRun(dryRun);
+        logger.warn("⚠️  TRADING MODE: DRY_RUN={}", dryRun);
+        if (!dryRun) {
+            logger.error("🚨 REAL TRADING ENABLED - REAL MONEY AT RISK! 🚨");
+        }
         return service;
     }
 
@@ -123,6 +127,10 @@ public class App {
             // Start kline streams for trading symbols
             webSocketService.startKlineStream(strategyEngine.getTradingSymbols());
             logger.info("📊 Kline streams started for symbols: {}", strategyEngine.getTradingSymbols());
+
+            // Start Mark Price Stream for real-time P&L updates
+            webSocketService.startMarkPriceStream(strategyEngine.getTradingSymbols().toArray(new String[0]));
+            logger.info("🏷️ Mark price streams started for symbols: {}", strategyEngine.getTradingSymbols());
 
             // Start automated trading
             strategyEngine.startAutomatedTrading();
