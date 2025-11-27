@@ -145,6 +145,7 @@ public class FuturesBinanceService {
         // startup)
         if (!skipInitialization) {
             Thread.ofVirtual().start(this::initializeTradingSettings);
+            Thread.ofVirtual().start(this::initializeExchangeInfo); // Initialize precision rules
         } else {
             logger.info("⏩ Skipping trading settings initialization (Backtest Mode)");
         }
@@ -504,5 +505,46 @@ public class FuturesBinanceService {
             params.put("limit", limit);
 
         return signedRequest("GET", "/fapi/v1/income", params);
+    }
+
+    /**
+     * Get Exchange Info (Symbol Rules)
+     * GET /fapi/v1/exchangeInfo
+     */
+    public String getExchangeInfo() {
+        try {
+            // Cache this? For now, fetch on startup or demand
+            return signedRequest("GET", "/fapi/v1/exchangeInfo", new LinkedHashMap<>());
+        } catch (Exception e) {
+            logger.error("Failed to get exchange info", e);
+            return "{}";
+        }
+    }
+
+    private Map<String, Integer> quantityPrecisionMap = new java.util.concurrent.ConcurrentHashMap<>();
+
+    /**
+     * Initialize symbol precision rules
+     */
+    public void initializeExchangeInfo() {
+        try {
+            String response = getExchangeInfo();
+            JSONObject json = new JSONObject(response);
+            JSONArray symbols = json.getJSONArray("symbols");
+
+            for (int i = 0; i < symbols.length(); i++) {
+                JSONObject sym = symbols.getJSONObject(i);
+                String symbol = sym.getString("symbol");
+                int precision = sym.getInt("quantityPrecision");
+                quantityPrecisionMap.put(symbol, precision);
+            }
+            logger.info("✅ Initialized precision rules for {} symbols", quantityPrecisionMap.size());
+        } catch (Exception e) {
+            logger.error("Failed to initialize exchange info", e);
+        }
+    }
+
+    public int getQuantityPrecision(String symbol) {
+        return quantityPrecisionMap.getOrDefault(symbol, 1); // Default to 1 if unknown
     }
 }

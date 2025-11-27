@@ -247,6 +247,9 @@ public class PositionTracker {
      */
     private void savePositionToDb(Position position) {
         try {
+            if (tradeRepository == null)
+                return; // Skip if no DB (e.g. backtest)
+
             Document doc = new Document()
                     .append("symbol", position.symbol)
                     .append("side", position.side)
@@ -266,6 +269,9 @@ public class PositionTracker {
      */
     private void updatePositionInDb(Position position, String status, double exitPrice, double pnl) {
         try {
+            if (tradeRepository == null)
+                return; // Skip if no DB (e.g. backtest)
+
             tradeRepository.updateTrade(position.symbol, exitPrice, pnl, status);
         } catch (Exception e) {
             logger.error("Failed to update position in DB", e);

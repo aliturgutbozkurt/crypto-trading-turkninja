@@ -40,14 +40,19 @@ public class StrategyEngine {
     private final MultiTimeframeService multiTimeframeService; // MTF Analysis (Phase 2)
     private final AdaptiveParameterService adaptiveParamService; // Adaptive Parameters (Phase 1.1)
     private final KellyPositionSizer kellyPositionSizer; // Kelly Criterion Position Sizing (Phase 1.1)
+    private final MarketRegimeDetector regimeDetector; // Hybrid Strategy: Market Regime Detection
+    private final com.turkninja.engine.strategy.MeanReversionStrategy meanReversionStrategy; // Hybrid Strategy: Mean
+                                                                                             // Reversion
 
     private final TelegramNotifier telegram;
     private WebSocketPushService webSocketPushService; // Optional, for UI notifications
 
+    // Trading symbols - Expanded to all major coins (per user request)
+    // Top performers: AVAXUSDT (+1.55%), BTCUSDT (-1.72%), Others for
+    // diversification
     private List<String> tradingSymbols = Arrays.asList(
-            "ETHUSDT", "SOLUSDT", "DOGEUSDT", "XRPUSDT", "ATOMUSDT",
-            "ALGOUSDT", "DOTUSDT", "AVAXUSDT", "LINKUSDT", "BNBUSDT",
-            "ADAUSDT", "NEARUSDT", "SANDUSDT", "MANAUSDT", "ARBUSDT");
+            "AVAXUSDT", "BTCUSDT", "ETHUSDT", "SOLUSDT", "DOGEUSDT",
+            "XRPUSDT", "DOTUSDT", "LINKUSDT", "BNBUSDT");
 
     private ScheduledExecutorService tradingScheduler;
     private ScheduledExecutorService batchProcessor; // Processes batched signals
@@ -61,6 +66,7 @@ public class StrategyEngine {
 
     // Async order execution (Phase 1.2)
     private final ExecutorService orderExecutor;
+    private boolean asyncExecutionEnabled = true; // Default to true for live trading
 
     // Strategy Filters (Phase 2 - Chain of Responsibility)
     private final List<StrategyCriteria> strategyFilters;
@@ -97,6 +103,10 @@ public class StrategyEngine {
                                                                                                     // as per original
         this.adaptiveParamService = new AdaptiveParameterService(indicatorService);
         this.kellyPositionSizer = new KellyPositionSizer();
+
+        // Initialize Hybrid Strategy components
+        this.regimeDetector = new MarketRegimeDetector(indicatorService);
+        this.meanReversionStrategy = new com.turkninja.engine.strategy.MeanReversionStrategy();
 
         // Initialize filters with parameters
         this.strategyFilters = new ArrayList<>();
@@ -313,6 +323,10 @@ public class StrategyEngine {
         return tradingSymbols;
     }
 
+    public RiskManager getRiskManager() {
+        return riskManager;
+    }
+
     private void analyzeBTC() {
         try {
             String symbol = "BTCUSDT";
@@ -386,151 +400,38 @@ public class StrategyEngine {
                 return;
             }
 
-            // 2. Check cooldown - prevent immediate reversal after closing
+            // 2. Check cooldown
             Long lastCloseTime = symbolCooldown.get(symbol);
             if (lastCloseTime != null) {
                 long timeSinceClose = System.currentTimeMillis() - lastCloseTime;
                 if (timeSinceClose < COOLDOWN_MILLIS) {
-                    long remainingSeconds = (COOLDOWN_MILLIS - timeSinceClose) / 1000;
-                    logger.debug("Skipping {} - cooldown active ({}s remaining)", symbol, remainingSeconds);
                     return;
                 }
-                // Cooldown expired, remove it
                 symbolCooldown.remove(symbol);
             }
 
-            // Calculate indicators
+            // 3. Calculate indicators
             Map<String, Double> indicators5m = indicatorService.calculateIndicators(series5m);
-
-            // Current Price
             double currentPrice = series5m.getLastBar().getClosePrice().doubleValue();
 
-            // 5m Trend Indicators
-            double ema50_5m = indicators5m.getOrDefault("EMA_50", currentPrice);
-            double rsi_5m = indicators5m.getOrDefault("RSI", 50.0);
-            double macd = indicators5m.getOrDefault("MACD", 0.0);
-            double macdSignal = indicators5m.getOrDefault("MACD_SIGNAL", 0.0);
+            // 4. Detect Market Regime
+            MarketRegime regime = regimeDetector.detectRegime(symbol, series5m, indicators5m);
+            double trendStrength = regimeDetector.getTrendStrength(regime, indicators5m.getOrDefault("ADX", 0.0));
 
-            logger.info("{} | Price={} | 5m[RSI={:.1f}, EMA50={:.2f}, MACD={:.4f}/{:.4f}]",
-                    symbol, currentPrice, rsi_5m, ema50_5m, macd, macdSignal);
+            logger.info("{} | Price={} | Regime={} (Strength={:.0f}%)",
+                    symbol, currentPrice, regime, trendStrength);
 
-            // --- 5-MINUTE STRATEGY (Trend + Momentum) ---
+            // 5. Select Strategy
+            String strategyMode = Config.get("strategy.mode", "HYBRID");
+            boolean allowTrend = "HYBRID".equals(strategyMode) || "TREND_ONLY".equals(strategyMode);
+            boolean allowRange = "HYBRID".equals(strategyMode) || "RANGE_ONLY".equals(strategyMode);
 
-            // Debug logging for specific symbols to trace signal generation
-            if (symbol.equals("ETHUSDT") || symbol.equals("SOLUSDT")) {
-                logger.info("🔍 Analysis for {}: Price={}, RSI={}, MACD={}, EMA50={}",
-                        symbol, currentPrice, rsi_5m, macd, ema50_5m);
-            }
-
-            // **HIGH WIN RATE STRATEGY - MODULAR FILTER CHAIN**
-
-            // 1. Evaluate LONG Criteria
-            boolean longPassed = true;
-            String longFailReason = null;
-
-            for (StrategyCriteria filter : strategyFilters) {
-                if (!filter.evaluate(symbol, series5m, indicators5m, currentPrice, true)) {
-                    longPassed = false;
-                    longFailReason = filter.getFailureReason(symbol, series5m, indicators5m, currentPrice, true);
-                    // logger.debug("⏸️ {} LONG filtered by: {}", symbol, filter.getFilterName());
-                    break;
-                }
-            }
-
-            if (longPassed) {
-                // BTC Trend Check: Don't LONG if BTC is bearish
-                if (btcTrend.equals("BEARISH")) {
-                    logger.info("⏸️ {} LONG filtered - BTC trend bearish", symbol);
-                    longPassed = false;
-                }
-
-                // Multi-Timeframe Filter: Don't LONG if higher TF is bearish (Phase 2)
-                else if (!multiTimeframeService.allowLong(symbol)) {
-                    longPassed = false; // Already logged in MTF service
-                }
-
-                // Order Book Confirmation (Imbalance + Walls)
-                else if (orderBookService != null && !orderBookService.confirmBuySignal(symbol, currentPrice)) {
-                    logger.info("⏸️ {} LONG signal filtered by Order Book (Imbalance/Walls)", symbol);
-                    longPassed = false;
-                }
-            }
-
-            if (longPassed) {
-                String buyReason = String.format("LONG: All filters passed. RSI=%.0f", rsi_5m);
-
-                // Batch mode: Calculate score and add to batch
-                if (batchModeEnabled) {
-                    SignalScore score = calculateSignalScore(symbol, "BUY", currentPrice,
-                            rsi_5m, macd, macdSignal, ema50_5m, 0);
-                    signalBatch.addSignal(score);
-                    logger.info("📊 Signal added to batch: {} BUY @ {} | Score: {}", symbol, currentPrice,
-                            score.totalScore);
-                    return; // Don't execute immediately
-                }
-
-                // Fallback: Immediate execution if batch mode disabled
-                String msg = String.format("🟢 BUY SIGNAL for %s: %s (Price=%.2f)", symbol, buyReason, currentPrice);
-                logger.info(msg);
-                System.out.println(msg);
-                // Push signal to UI before executing
-                pushSignal(symbol, "BUY", buyReason, currentPrice, true, "PENDING");
-                // ========== EXECUTE (ASYNC) ==========
-                submitOrderAsync(symbol, "BUY", currentPrice);
-                return; // Exit after LONG signal
-            }
-
-            // 2. Evaluate SHORT Criteria
-            boolean shortPassed = true;
-            String shortFailReason = null;
-
-            for (StrategyCriteria filter : strategyFilters) {
-                if (!filter.evaluate(symbol, series5m, indicators5m, currentPrice, false)) {
-                    shortPassed = false;
-                    shortFailReason = filter.getFailureReason(symbol, series5m, indicators5m, currentPrice, false);
-                    // logger.debug("⏸️ {} SHORT filtered by: {}", symbol, filter.getFilterName());
-                    break;
-                }
-            }
-
-            if (shortPassed) {
-                // BTC Trend Check: Don't SHORT if BTC is bullish
-                if (btcTrend.equals("BULLISH")) {
-                    logger.info("⏸️ {} SHORT filtered - BTC trend bullish", symbol);
-                    shortPassed = false;
-                }
-
-                // Multi-Timeframe Filter: Don't SHORT if higher TF is bullish (Phase 2)
-                else if (!multiTimeframeService.allowShort(symbol)) {
-                    shortPassed = false; // Already logged in MTF service
-                }
-
-                // Order Book Confirmation (Imbalance + Walls)
-                else if (orderBookService != null && !orderBookService.confirmSellSignal(symbol, currentPrice)) {
-                    logger.info("⏸️ {} SHORT signal filtered by Order Book (Imbalance/Walls)", symbol);
-                    shortPassed = false;
-                }
-            }
-
-            if (shortPassed) {
-                String sellReason = String.format("SHORT: All filters passed. RSI=%.0f", rsi_5m);
-
-                // Batch mode: Calculate score and add to batch
-                if (batchModeEnabled) {
-                    SignalScore score = calculateSignalScore(symbol, "SELL", currentPrice,
-                            rsi_5m, macd, macdSignal, ema50_5m, 0);
-                    signalBatch.addSignal(score);
-                    return; // Don't execute immediately
-                }
-
-                // Fallback: Immediate execution if batch mode disabled
-                String msg = String.format("🔴 SELL SIGNAL for %s: %s (Price=%.2f)", symbol, sellReason, currentPrice);
-                logger.info(msg);
-                System.out.println(msg);
-                // Push signal to UI before executing
-                pushSignal(symbol, "SELL", sellReason, currentPrice, true, "PENDING");
-                // ========== EXECUTE (ASYNC) ==========
-                submitOrderAsync(symbol, "SELL", currentPrice);
+            if (allowTrend && regime.isTrending()) {
+                analyzeTrendFollowing(symbol, series5m, indicators5m, currentPrice, regime);
+            } else if (allowRange && regime.isRanging()) {
+                analyzeMeanReversion(symbol, series5m, indicators5m, currentPrice, regime);
+            } else {
+                logger.info("⏸️ {} Skipped - Regime {} not suitable for mode {}", symbol, regime, strategyMode);
             }
 
         } catch (Exception e) {
@@ -538,14 +439,129 @@ public class StrategyEngine {
         }
     }
 
+    private void analyzeTrendFollowing(String symbol, BarSeries series5m, Map<String, Double> indicators5m,
+            double currentPrice, MarketRegime regime) {
+        // 5m Trend Indicators
+        double ema50_5m = indicators5m.getOrDefault("EMA_50", currentPrice);
+        double rsi_5m = indicators5m.getOrDefault("RSI", 50.0);
+        double macd = indicators5m.getOrDefault("MACD", 0.0);
+        double macdSignal = indicators5m.getOrDefault("MACD_SIGNAL", 0.0);
+
+        // 1. Evaluate LONG Criteria
+        boolean longPassed = true;
+        String longFailReason = null;
+
+        for (StrategyCriteria filter : strategyFilters) {
+            if (!filter.evaluate(symbol, series5m, indicators5m, currentPrice, true)) {
+                longPassed = false;
+                longFailReason = filter.getFailureReason(symbol, series5m, indicators5m, currentPrice, true);
+                logger.info("⏸️ {} LONG filtered by: {} Reason: {}", symbol, filter.getFilterName(), longFailReason);
+                break;
+            }
+        }
+
+        if (longPassed) {
+            if (btcTrend.equals("BEARISH")) {
+                logger.info("⏸️ {} LONG filtered - BTC trend bearish", symbol);
+                longPassed = false;
+            } else if (!multiTimeframeService.allowLong(symbol)) {
+                logger.info("⏸️ {} LONG filtered - MTF bearish", symbol);
+                longPassed = false;
+            } else if (orderBookService != null && !orderBookService.confirmBuySignal(symbol, currentPrice)) {
+                logger.info("⏸️ {} LONG filtered - OrderBook imbalance", symbol);
+                longPassed = false;
+            }
+        }
+
+        if (longPassed) {
+            String buyReason = String.format("LONG (Trend): All filters passed. Regime=%s", regime);
+            if (batchModeEnabled) {
+                SignalScore score = calculateSignalScore(symbol, "BUY", currentPrice, rsi_5m, macd, macdSignal,
+                        ema50_5m, 0);
+                signalBatch.addSignal(score);
+                return;
+            }
+            pushSignal(symbol, "BUY", buyReason, currentPrice, true, "PENDING");
+            submitOrderAsync(symbol, "BUY", currentPrice, regime);
+            return;
+        }
+
+        // 2. Evaluate SHORT Criteria
+        boolean shortPassed = true;
+        String shortFailReason = null;
+
+        for (StrategyCriteria filter : strategyFilters) {
+            if (!filter.evaluate(symbol, series5m, indicators5m, currentPrice, false)) {
+                shortPassed = false;
+                shortFailReason = filter.getFailureReason(symbol, series5m, indicators5m, currentPrice, false);
+                logger.info("⏸️ {} SHORT filtered by: {} Reason: {}", symbol, filter.getFilterName(), shortFailReason);
+                break;
+            }
+        }
+
+        if (shortPassed) {
+            if (btcTrend.equals("BULLISH")) {
+                logger.info("⏸️ {} SHORT filtered - BTC trend bullish", symbol);
+                shortPassed = false;
+            } else if (!multiTimeframeService.allowShort(symbol)) {
+                logger.info("⏸️ {} SHORT filtered - MTF bullish", symbol);
+                shortPassed = false;
+            } else if (orderBookService != null && !orderBookService.confirmSellSignal(symbol, currentPrice)) {
+                logger.info("⏸️ {} SHORT filtered - OrderBook imbalance", symbol);
+                shortPassed = false;
+            }
+        }
+
+        if (shortPassed) {
+            String sellReason = String.format("SHORT (Trend): All filters passed. Regime=%s", regime);
+            if (batchModeEnabled) {
+                SignalScore score = calculateSignalScore(symbol, "SELL", currentPrice, rsi_5m, macd, macdSignal,
+                        ema50_5m, 0);
+                signalBatch.addSignal(score);
+                return;
+            }
+            pushSignal(symbol, "SELL", sellReason, currentPrice, true, "PENDING");
+            submitOrderAsync(symbol, "SELL", currentPrice, regime);
+        }
+    }
+
+    private void analyzeMeanReversion(String symbol, BarSeries series5m, Map<String, Double> indicators5m,
+            double currentPrice, MarketRegime regime) {
+        // Mean Reversion Strategy
+        if (meanReversionStrategy.checkLongEntry(symbol, series5m, indicators5m, currentPrice)) {
+            String reason = String.format("LONG (MeanRev): BB Lower Touch + RSI Oversold. Regime=%s", regime);
+            logger.info("🟢 MEAN REVERSION BUY: {}", reason);
+            pushSignal(symbol, "BUY", reason, currentPrice, true, "PENDING");
+            submitOrderAsync(symbol, "BUY", currentPrice, regime);
+            return;
+        }
+
+        if (meanReversionStrategy.checkShortEntry(symbol, series5m, indicators5m, currentPrice)) {
+            String reason = String.format("SHORT (MeanRev): BB Upper Touch + RSI Overbought. Regime=%s", regime);
+            logger.info("🔴 MEAN REVERSION SELL: {}", reason);
+            pushSignal(symbol, "SELL", reason, currentPrice, true, "PENDING");
+            submitOrderAsync(symbol, "SELL", currentPrice, regime);
+        }
+    }
+
     /**
      * Submit order asynchronously (Phase 1.2)
      * Non-blocking execution using Virtual Threads
      */
-    private void submitOrderAsync(String symbol, String side, double price) {
+    private void submitOrderAsync(String symbol, String side, double price, MarketRegime regime) {
+        if (!asyncExecutionEnabled) {
+            // Synchronous execution for backtesting
+            try {
+                executeEntry(symbol, side, price, regime);
+            } catch (Exception e) {
+                logger.error("❌ Sync order failed for {} {}", symbol, side, e);
+            }
+            return;
+        }
+
         CompletableFuture.runAsync(() -> {
             try {
-                executeEntry(symbol, side, price);
+                executeEntry(symbol, side, price, regime);
             } catch (Exception e) {
                 logger.error("❌ Async order failed for {} {}", symbol, side, e);
                 telegram.sendAlert(TelegramNotifier.AlertLevel.CRITICAL, String.format(
@@ -561,10 +577,10 @@ public class StrategyEngine {
         logger.debug("✅ {} {} order submitted async", symbol, side);
     }
 
-    private void executeEntry(String symbol, String side, double price) {
+    private void executeEntry(String symbol, String side, double price, MarketRegime regime) {
         try {
             // 1. Calculate position size
-            double positionSize = calculatePositionSize(symbol, price);
+            double positionSize = calculatePositionSize(symbol, price, regime);
 
             // 2. Check correlation risk (NEW - Phase 1.1)
             if (!riskManager.checkCorrelationRisk(symbol, side)) {
@@ -671,7 +687,7 @@ public class StrategyEngine {
         }
     }
 
-    private double calculatePositionSize(String symbol, double price) {
+    private double calculatePositionSize(String symbol, double price, MarketRegime regime) {
         try {
             // Get available balance
             String accountJson = futuresService.getAccountInfo();
@@ -699,6 +715,17 @@ public class StrategyEngine {
 
             // Cap at risk manager's max position size
             positionSize = Math.min(positionSize, 100.0); // $100 max from RiskManager
+
+            // Apply Regime Multiplier (Hybrid Strategy)
+            if (regime != null) {
+                double multiplier = regimeDetector.getPositionSizeMultiplier(regime);
+                if (multiplier != 1.0) {
+                    logger.info("⚖️ Adjusting position size for {}: ${} * {:.0f}% = ${}",
+                            symbol, String.format("%.2f", positionSize), multiplier * 100,
+                            String.format("%.2f", positionSize * multiplier));
+                    positionSize *= multiplier;
+                }
+            }
 
             return positionSize;
 
@@ -770,44 +797,10 @@ public class StrategyEngine {
         // Round to appropriate precision based on Binance symbol rules
         // Reference: https://www.binance.com/en/futures/BTCUSDT (check "Quantity
         // Precision")
-        switch (symbol) {
-            // 3 decimals (0.001)
-            case "BTCUSDT":
-            case "ETHUSDT":
-            case "BCHUSDT":
-                quantity = Math.floor(quantity * 1000.0) / 1000.0;
-                break;
-
-            // 2 decimals (0.01)
-            case "AVAXUSDT":
-            case "BNBUSDT":
-                quantity = Math.floor(quantity * 100.0) / 100.0;
-                break;
-
-            // 1 decimal (0.1)
-            case "SOLUSDT":
-            case "ALGOUSDT":
-            case "DOTUSDT":
-            case "ATOMUSDT":
-            case "LINKUSDT":
-                quantity = Math.floor(quantity * 10.0) / 10.0;
-                break;
-
-            // Integer (1.0) - no decimals
-            case "DOGEUSDT":
-            case "XRPUSDT":
-            case "MANAUSDT":
-            case "SANDUSDT":
-            case "NEARUSDT":
-            case "ADAUSDT":
-            case "ARBUSDT":
-                quantity = Math.floor(quantity);
-                break;
-
-            // Default: 1 decimal
-            default:
-                quantity = Math.floor(quantity * 10.0) / 10.0;
-        }
+        // Dynamic Precision from Exchange Info
+        int precision = futuresService.getQuantityPrecision(symbol);
+        double scale = Math.pow(10, precision);
+        quantity = Math.floor(quantity * scale) / scale;
 
         return quantity;
     }
@@ -986,10 +979,15 @@ public class StrategyEngine {
         // Execute entries for best signals
         for (SignalScore sig : bestSignals) {
             logger.info("✅ Executing BEST signal: {} {}", sig.symbol, sig.side);
-            executeEntry(sig.symbol, sig.side, sig.price);
+            executeEntry(sig.symbol, sig.side, sig.price, null);
         }
 
         signalBatch.clear();
+    }
+
+    public void setAsyncExecution(boolean enabled) {
+        this.asyncExecutionEnabled = enabled;
+        logger.info("Async execution set to: {}", enabled);
     }
 
     public void shutdown() {

@@ -1,0 +1,245 @@
+package com.turkninja;
+
+import com.turkninja.config.Config;
+import com.turkninja.engine.*;
+import com.turkninja.infra.*;
+import com.turkninja.model.BacktestReport;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * Manual Parameter Optimizer
+ * Tests a few hand-picked parameter profiles to quickly find better settings
+ */
+public class ManualOptimizer {
+
+    private static final Logger logger = LoggerFactory.getLogger(ManualOptimizer.class);
+
+    public static void main(String[] args) {
+        String symbol = "ETHUSDT";
+        String startDate = "2024-10-26";
+        String endDate = "2024-11-26";
+
+        logger.info("╔══════════════════════════════════════════════╗");
+        logger.info("║   MANUAL PARAMETER OPTIMIZATION              ║");
+        logger.info("╚══════════════════════════════════════════════╝");
+        logger.info("");
+        logger.info("Testing 5 parameter profiles...");
+        logger.info("");
+
+        // Define parameter profiles
+        List<ParameterProfile> profiles = new ArrayList<>();
+
+        // Profile 1: CONSERVATIVE (fewer trades, higher quality)
+        Map<String, String> conservative = new HashMap<>();
+        conservative.put("risk.stop_loss_percent", "0.025");
+        conservative.put("risk.take_profit_percent", "0.05");
+        conservative.put("risk.trailing_stop_percent", "0.01");
+        conservative.put("strategy.rsi.long.min", "35");
+        conservative.put("strategy.rsi.long.max", "60");
+        conservative.put("strategy.rsi.short.min", "40");
+        conservative.put("strategy.rsi.short.max", "65");
+        conservative.put("strategy.adx.min.strength", "25");
+        conservative.put("strategy.ema.slope.min.percent", "0.004");
+        conservative.put("strategy.ema.buffer.percent", "0.003");
+        profiles.add(new ParameterProfile("CONSERVATIVE", conservative));
+
+        // Profile 2: BALANCED
+        Map<String, String> balanced = new HashMap<>();
+        balanced.put("risk.stop_loss_percent", "0.02");
+        balanced.put("risk.take_profit_percent", "0.04");
+        balanced.put("risk.trailing_stop_percent", "0.008");
+        balanced.put("strategy.rsi.long.min", "30");
+        balanced.put("strategy.rsi.long.max", "70");
+        balanced.put("strategy.rsi.short.min", "30");
+        balanced.put("strategy.rsi.short.max", "70");
+        balanced.put("strategy.adx.min.strength", "20");
+        balanced.put("strategy.ema.slope.min.percent", "0.002");
+        balanced.put("strategy.ema.buffer.percent", "0.002");
+        profiles.add(new ParameterProfile("BALANCED", balanced));
+
+        // Profile 3: AGGRESSIVE (more trades, tighter stops)
+        Map<String, String> aggressive = new HashMap<>();
+        aggressive.put("risk.stop_loss_percent", "0.015");
+        aggressive.put("risk.take_profit_percent", "0.03");
+        aggressive.put("risk.trailing_stop_percent", "0.005");
+        aggressive.put("strategy.rsi.long.min", "25");
+        aggressive.put("strategy.rsi.long.max", "75");
+        aggressive.put("strategy.rsi.short.min", "25");
+        aggressive.put("strategy.rsi.short.max", "75");
+        aggressive.put("strategy.adx.min.strength", "15");
+        aggressive.put("strategy.ema.slope.min.percent", "0.001");
+        aggressive.put("strategy.ema.buffer.percent", "0.001");
+        profiles.add(new ParameterProfile("AGGRESSIVE", aggressive));
+
+        // Profile 4: TREND FOLLOWING (strong trends only)
+        Map<String, String> trendFollowing = new HashMap<>();
+        trendFollowing.put("risk.stop_loss_percent", "0.03");
+        trendFollowing.put("risk.take_profit_percent", "0.06");
+        trendFollowing.put("risk.trailing_stop_percent", "0.01");
+        trendFollowing.put("strategy.rsi.long.min", "40");
+        trendFollowing.put("strategy.rsi.long.max", "65");
+        trendFollowing.put("strategy.rsi.short.min", "35");
+        trendFollowing.put("strategy.rsi.short.max", "60");
+        trendFollowing.put("strategy.adx.min.strength", "30");
+        trendFollowing.put("strategy.ema.slope.min.percent", "0.005");
+        trendFollowing.put("strategy.ema.buffer.percent", "0.005");
+        profiles.add(new ParameterProfile("TREND_FOLLOWING", trendFollowing));
+
+        // Profile 5: MEAN REVERSION (ranging markets)
+        Map<String, String> meanReversion = new HashMap<>();
+        meanReversion.put("risk.stop_loss_percent", "0.02");
+        meanReversion.put("risk.take_profit_percent", "0.035");
+        meanReversion.put("risk.trailing_stop_percent", "0.007");
+        meanReversion.put("strategy.rsi.long.min", "20");
+        meanReversion.put("strategy.rsi.long.max", "80");
+        meanReversion.put("strategy.rsi.short.min", "20");
+        meanReversion.put("strategy.rsi.short.max", "80");
+        meanReversion.put("strategy.adx.min.strength", "15");
+        meanReversion.put("strategy.ema.slope.min.percent", "0.001");
+        meanReversion.put("strategy.ema.buffer.percent", "0.002");
+        profiles.add(new ParameterProfile("MEAN_REVERSION", meanReversion));
+
+        // Run backtests
+        List<ProfileResult> results = new ArrayList<>();
+
+        try {
+            // Initialize services
+            Config.setProperty("strategy.batch.enabled", "false");
+            Config.setProperty("strategy.mtf.enabled", "false");
+
+            FuturesBinanceService realBinanceService = new FuturesBinanceService(true);
+            IndicatorService indicatorService = new IndicatorService();
+
+            for (int i = 0; i < profiles.size(); i++) {
+                ParameterProfile profile = profiles.get(i);
+
+                logger.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+                logger.info("Testing Profile {}/{}: {}", i + 1, profiles.size(), profile.name);
+                logger.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+
+                // Apply parameters
+                for (Map.Entry<String, String> entry : profile.parameters.entrySet()) {
+                    Config.setProperty(entry.getKey(), entry.getValue());
+                }
+
+                // Run backtest
+                MockFuturesBinanceService mockService = new MockFuturesBinanceService(1000.0);
+                FuturesWebSocketService mockWebSocketService = new FuturesWebSocketService("mockKey", "mockSecret") {
+                    @Override
+                    public void startUserDataStream() {
+                    }
+
+                    @Override
+                    public void startKlineStream(List<String> symbols) {
+                    }
+
+                    @Override
+                    public void startDepthStream(List<String> symbols) {
+                    }
+                };
+
+                RiskManager riskManager = new RiskManager(null, mockService, null,
+                        new CorrelationService(realBinanceService));
+                PositionTracker positionTracker = new PositionTracker(null, riskManager);
+                riskManager.setPositionTracker(positionTracker);
+
+                TelegramNotifier mockTelegram = new TelegramNotifier() {
+                    public void sendMessage(String message) {
+                    }
+
+                    public void sendAlert(AlertLevel level, String message) {
+                    }
+                };
+
+                StrategyEngine strategyEngine = new StrategyEngine(
+                        mockWebSocketService, mockService, indicatorService,
+                        riskManager, positionTracker, null, mockTelegram);
+
+                strategyEngine.setAsyncExecution(false);
+
+                BacktestEngine backtestEngine = new BacktestEngine(
+                        strategyEngine, mockService, realBinanceService, indicatorService);
+
+                BacktestReport report = backtestEngine.runBacktest(symbol, startDate, endDate, "5m");
+
+                if (report != null) {
+                    results.add(new ProfileResult(profile.name, report));
+                    logger.info("✅ Sharpe: {:.2f}, Win Rate: {:.1f}%, Profit: {:.2f}%",
+                            report.sharpeRatio, report.winRate, report.getNetProfitPercent());
+                }
+
+                logger.info("");
+            }
+
+            // Print comparison
+            printComparison(results);
+
+        } catch (Exception e) {
+            logger.error("Manual optimization failed", e);
+            System.exit(1);
+        }
+    }
+
+    private static void printComparison(List<ProfileResult> results) {
+        System.out.println("\n\n");
+        System.out.println("╔══════════════════════════════════════════════════════════════════════╗");
+        System.out.println("║                    PROFILE COMPARISON                                 ║");
+        System.out.println("╚══════════════════════════════════════════════════════════════════════╝");
+        System.out.println("");
+
+        System.out.printf("%-20s | %8s | %8s | %10s | %10s | %8s%n",
+                "Profile", "Trades", "Win%", "Sharpe", "Profit", "Max DD");
+        System.out.println("─────────────────────┼──────────┼──────────┼────────────┼────────────┼──────────");
+
+        for (ProfileResult result : results) {
+            BacktestReport r = result.report;
+            System.out.printf("%-20s | %8d | %7.1f%% | %10.2f | %9.2f%% | %7.2f%%%n",
+                    result.profileName,
+                    r.totalTrades,
+                    r.winRate,
+                    r.sharpeRatio,
+                    r.getNetProfitPercent(),
+                    r.maxDrawdownPercent);
+        }
+
+        // Find best
+        ProfileResult best = results.stream()
+                .max((a, b) -> Double.compare(a.report.sharpeRatio, b.report.sharpeRatio))
+                .orElse(null);
+
+        if (best != null) {
+            System.out.println("");
+            System.out.println("🏆 BEST PROFILE: " + best.profileName);
+            System.out.printf("   Sharpe: %.2f | Win Rate: %.1f%% | Profit: %.2f%%%n",
+                    best.report.sharpeRatio, best.report.winRate, best.report.getNetProfitPercent());
+        }
+
+        System.out.println("");
+    }
+
+    static class ParameterProfile {
+        String name;
+        Map<String, String> parameters;
+
+        ParameterProfile(String name, Map<String, String> parameters) {
+            this.name = name;
+            this.parameters = parameters;
+        }
+    }
+
+    static class ProfileResult {
+        String profileName;
+        BacktestReport report;
+
+        ProfileResult(String profileName, BacktestReport report) {
+            this.profileName = profileName;
+            this.report = report;
+        }
+    }
+}

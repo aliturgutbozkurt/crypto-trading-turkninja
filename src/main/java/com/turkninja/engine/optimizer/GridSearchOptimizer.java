@@ -172,9 +172,29 @@ public class GridSearchOptimizer implements ParameterOptimizer {
 
                 riskManager.setPositionTracker(positionTracker);
 
-                // 3. Create StrategyEngine with parameters
+                // 3. Mock WebSocket Service (to prevent NPE in MultiTimeframeService)
+                FuturesWebSocketService mockWebSocketService = new FuturesWebSocketService("mockKey", "mockSecret") {
+                        @Override
+                        public void startUserDataStream() {
+                        }
+
+                        @Override
+                        public void startKlineStream(List<String> symbols) {
+                        }
+
+                        @Override
+                        public void startDepthStream(List<String> symbols) {
+                        }
+
+                        @Override
+                        public List<org.json.JSONObject> getCachedKlines(String symbol, String interval, int limit) {
+                                return new ArrayList<>(); // Return empty list for MTF (it will skip MTF checks)
+                        }
+                };
+
+                // 4. Create StrategyEngine with parameters
                 com.turkninja.engine.StrategyEngine strategyEngine = new com.turkninja.engine.StrategyEngine(
-                                webSocketService,
+                                mockWebSocketService,
                                 mockBinanceService,
                                 indicatorService,
                                 riskManager,

@@ -98,13 +98,22 @@ public class OptimizerRunner {
                 OptimizationResult result;
 
                 if ("grid".equalsIgnoreCase(method)) {
-                    // Initialize Optimizer
+                    // Initialize Grid Search Optimizer
                     GridSearchOptimizer optimizer = new GridSearchOptimizer(
                             indicatorService,
                             null, // webSocketService (not available in this context)
                             futuresService, // binanceService (using futuresService as the real Binance service)
                             null, // telegramNotifier (not available in this context)
                             null); // orderBookService (not available in this context)
+                    result = optimizer.optimize(symbol, startDate, endDate, parameterSpace);
+                } else if ("genetic".equalsIgnoreCase(method)) {
+                    // Initialize Genetic Optimizer
+                    com.turkninja.engine.optimizer.GeneticOptimizer optimizer = new com.turkninja.engine.optimizer.GeneticOptimizer(
+                            indicatorService,
+                            null, // webSocketService
+                            futuresService,
+                            null, // telegramNotifier
+                            null); // orderBookService
                     result = optimizer.optimize(symbol, startDate, endDate, parameterSpace);
                 } else {
                     logger.error("Unknown optimization method: {}. Use 'grid' or 'genetic'", method);
@@ -170,22 +179,26 @@ public class OptimizerRunner {
     /**
      * Create default parameter space for optimization
      * 
-     * Small parameter space for faster testing:
-     * Total combinations: 3 × 3 × 3 × 2 × 2 × 3 = 324
+     * Expanded parameter space for Genetic Algorithm
      */
     private static ParameterSpace createParameterSpace() {
         return new ParameterSpace()
-                // RSI parameters
-                .addDiscrete("strategy.rsi.long.min", 45, 50, 55)
-                .addDiscrete("strategy.rsi.long.max", 65, 70, 75)
-                .addDiscrete("strategy.rsi.short.min", 25, 30, 35)
-                .addDiscrete("strategy.rsi.short.max", 45, 50, 55)
+                // Risk Management Parameters - MINIMAL for fast optimization
+                .addDiscrete("risk.stop_loss_percent", 0.015, 0.025)
+                .addDiscrete("risk.take_profit_percent", 0.03, 0.05)
+                .addDiscrete("risk.trailing_stop_percent", 0.005, 0.01)
 
-                // EMA Slope parameters
-                .addDiscrete("strategy.ema.slope.min.percent", 0.01, 0.03, 0.05)
-                .addDiscrete("strategy.ema.buffer.percent", 0.001, 0.005, 0.01)
+                // RSI parameters - MINIMAL
+                .addDiscrete("strategy.rsi.long.min", 30, 40)
+                .addDiscrete("strategy.rsi.long.max", 65, 75)
+                .addDiscrete("strategy.rsi.short.min", 25, 35)
+                .addDiscrete("strategy.rsi.short.max", 55, 65)
 
-                // ADX threshold
-                .addDiscrete("strategy.adx.min.strength", 15, 20, 25);
+                // ADX threshold - MINIMAL
+                .addDiscrete("strategy.adx.min.strength", 20, 25)
+
+                // EMA Slope - MINIMAL
+                .addDiscrete("strategy.ema.slope.min.percent", 0.002, 0.004)
+                .addDiscrete("strategy.ema.buffer.percent", 0.002, 0.004);
     }
 }

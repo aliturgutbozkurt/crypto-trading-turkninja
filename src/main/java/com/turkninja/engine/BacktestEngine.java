@@ -111,6 +111,9 @@ public class BacktestEngine {
             double closePrice = bar.getClosePrice().doubleValue();
             mockFuturesService.setCurrentPrice(symbol, closePrice);
 
+            // Check for exits (SL/TP/Trailing) - Critical for backtest!
+            strategyEngine.getRiskManager().onPriceUpdate(symbol, closePrice);
+
             // 2. Execute Strategy Logic (only if we have enough bars for indicators)
             if (i >= 50) { // Need 50+ bars for indicators like EMA50
                 try {

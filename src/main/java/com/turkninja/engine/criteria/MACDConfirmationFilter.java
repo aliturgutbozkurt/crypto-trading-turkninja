@@ -34,6 +34,12 @@ public class MACDConfirmationFilter implements StrategyCriteria {
     @Override
     public boolean evaluate(String symbol, org.ta4j.core.BarSeries series, Map<String, Double> indicators,
             double currentPrice, boolean isLong) {
+        // Check if MACD filter is enabled
+        boolean enabled = Boolean.parseBoolean(Config.get("strategy.macd.filter.enabled", "true"));
+        if (!enabled) {
+            return true; // Skip filter if disabled
+        }
+
         Double macd = indicators.get("MACD");
         Double macdSignal = indicators.get("MACD_SIGNAL");
 

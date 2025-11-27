@@ -1,6 +1,7 @@
 package com.turkninja;
 
 import com.turkninja.engine.*;
+import com.turkninja.config.Config;
 import com.turkninja.infra.*;
 import com.turkninja.model.BacktestReport;
 import org.slf4j.Logger;
@@ -20,12 +21,11 @@ public class QuickBacktestRunner {
 
     // All trading symbols
     private static final List<String> ALL_SYMBOLS = Arrays.asList(
-            "ATOMUSDT", "BTCUSDT", "ETHUSDT", "DOGEUSDT", "SOLUSDT",
-            "XRPUSDT", "ALGOUSDT", "DOTUSDT", "AVAXUSDT", "LINKUSDT", "BNBUSDT");
+            "BTCUSDT", "ETHUSDT", "SOLUSDT", "AVAXUSDT");
 
     public static void main(String[] args) {
-        String startDate = "2024-10-26"; // 1 month ago
-        String endDate = "2024-11-26";
+        String startDate = "2025-10-27"; // 1 month ago (updated to current year)
+        String endDate = "2025-11-27";
 
         if (args.length >= 2) {
             startDate = args[0];
@@ -42,6 +42,13 @@ public class QuickBacktestRunner {
 
         try {
             // 1. Initialize Core Services
+            // DISABLE BATCH MODE FOR BACKTEST (Critical: Backtest loop doesn't run the
+            // batch processor)
+            Config.setProperty("strategy.batch.enabled", "false");
+
+            // Disable MTF for backtest (to avoid missing data issues on higher TFs)
+            Config.setProperty("strategy.mtf.enabled", "false");
+
             FuturesBinanceService realBinanceService = new FuturesBinanceService(true); // Skip init for backtest
             IndicatorService indicatorService = new IndicatorService();
 
@@ -92,12 +99,15 @@ public class QuickBacktestRunner {
             // 4. Create StrategyEngine
             StrategyEngine strategyEngine = new StrategyEngine(
                     mockWebSocketService,
-                    mockService, // Use mock service for execution
+                    mockService, // Use Mock Service!
                     indicatorService,
                     riskManager,
                     positionTracker,
                     mockOrderBookService,
                     mockTelegram);
+
+            // Disable async execution for backtest (CRITICAL for correct simulation)
+            strategyEngine.setAsyncExecution(false);
 
             List<BacktestReport> allReports = new ArrayList<>();
 

@@ -117,6 +117,24 @@ public class App {
     }
 
     @Bean
+    public CommandLineRunner startStrategyEngine(StrategyEngine strategyEngine,
+            FuturesWebSocketService webSocketService) {
+        return args -> {
+            // Start kline streams for trading symbols
+            webSocketService.startKlineStream(strategyEngine.getTradingSymbols());
+            logger.info("📊 Kline streams started for symbols: {}", strategyEngine.getTradingSymbols());
+
+            // Start automated trading
+            strategyEngine.startAutomatedTrading();
+            logger.info("🚀 Automated Trading Engine STARTED");
+            logger.info("🎯 Monitoring: {}", strategyEngine.getTradingSymbols());
+            logger.info("⚙️  Mode: {} (DRY_RUN={})",
+                    Config.get("strategy.mode", "HYBRID"),
+                    Config.get(Config.DRY_RUN, "false"));
+        };
+    }
+
+    @Bean
     public SynchronizationService synchronizationService(FuturesBinanceService futuresBinanceService,
             AccountRepository accountRepository) {
         return new SynchronizationService(futuresBinanceService, accountRepository);

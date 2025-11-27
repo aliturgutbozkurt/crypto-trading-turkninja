@@ -441,17 +441,32 @@ public class RiskManager {
      * This provides faster response than the 1-second polling loop
      */
     public void checkPositionOnPriceUpdate(String symbol, double currentPrice) {
-        if (!monitoringActive) {
-            return;
-        }
+        onPriceUpdate(symbol, currentPrice);
+    }
 
+    /**
+     * Process price update for a specific symbol (checks SL/TP and Trailing Stop)
+     * Useful for backtesting and event-driven updates
+     */
+    public void onPriceUpdate(String symbol, double currentPrice) {
         try {
             PositionTracker.Position position = positionTracker.getPosition(symbol);
             if (position == null) {
                 return; // No position for this symbol
             }
 
-            // Check trailing stop (real-time)
+            // 1. Check Fixed SL/TP
+            PositionTracker.PositionAction action = positionTracker.checkPosition(symbol, currentPrice);
+
+            if (action == PositionTracker.PositionAction.CLOSE_STOP_LOSS) {
+                closePosition(symbol, position, "STOP_LOSS", currentPrice);
+                return;
+            } else if (action == PositionTracker.PositionAction.CLOSE_TAKE_PROFIT) {
+                closePosition(symbol, position, "TAKE_PROFIT", currentPrice);
+                return;
+            }
+
+            // 2. Check Trailing Stop (only if fixed SL/TP didn't trigger)
             boolean trailingStopTriggered = checkExitCondition(
                     symbol,
                     BigDecimal.valueOf(currentPrice),
