@@ -57,6 +57,11 @@ function connectWebSocket() {
                 updateDashboard(data);
             } else if (data.type === 'SIGNAL') {
                 addSignal(data.signal);
+            } else if (data.type === 'METRICS_UPDATE') {
+                // Update metrics in real-time when trades close
+                if (data.metrics) {
+                    renderMetrics(data.metrics);
+                }
             }
         } catch (e) {
             console.error('❌ Error parsing WebSocket message:', e);
@@ -261,4 +266,170 @@ function addSignal(signal) {
     while (signalsList.children.length > 50) {
         signalsList.removeChild(signalsList.lastChild);
     }
+}
+
+// --- Trading History Logic ---
+
+let historyPage = 0;
+let historyLimit = 10;
+let historyTab = 'all'; // 'all', 'active', 'closed'
+
+// Load history on startup
+document.addEventListener('DOMContentLoaded', function () {
+    loadTradeHistory();
+});
+
+async function loadTradeHistory() {
+    const tbody = document.getElementById('historyBody');
+    const pageInfo = document.getElementById('pageInfo');
+    const prevBtn = document.getElementById('prevBtn');
+    const nextBtn = document.getElementById('nextBtn');
+
+    // Show loading state if first load
+    if (tbody.innerHTML.includes('Loading')) {
+        tbody.innerHTML = '<tr><td colspan="10" class="no-data"><div class="loading"></div> Loading history...</td></tr>';
+    }
+
+    try {
+        const offset = historyPage * historyLimit;
+        const response = await fetch(`/api/trade-history?limit=${historyLimit}&offset=${offset}`);
+        const data = await response.json();
+
+        renderTradeHistory(data);
+
+        // Render metrics
+        if (data.stats) {
+            renderMetrics(data.stats);
+        }
+
+        // Update pagination controls
+        pageInfo.textContent = `Page ${historyPage + 1}`;
+        prevBtn.disabled = historyPage === 0;
+
+        // Disable next button if we received fewer items than limit (end of list)
+        // Note: This is an approximation. Ideally backend returns total count.
+        const activeCount = data.active ? data.active.length : 0;
+        const closedCount = data.closed ? data.closed.length : 0;
+        const totalItems = activeCount + closedCount;
+
+        // If we are showing "active" tab, we might have more pages of closed trades even if active is empty
+        // For simplicity, we'll rely on the 'closed' list size for pagination when not in 'active' mode
+
+        if (historyTab === 'active') {
+            nextBtn.disabled = true; // Active positions usually fit in one page
+        } else {
+            nextBtn.disabled = closedCount < historyLimit;
+        }
+
+    } catch (error) {
+        console.error('Error loading trade history:', error);
+        tbody.innerHTML = `<tr><td colspan="10" class="no-data" style="color: #e74c3c">Error loading history: ${error.message}</td></tr>`;
+    }
+}
+
+function renderTradeHistory(data) {
+    const tbody = document.getElementById('historyBody');
+    let trades = [];
+
+    // Combine/Filter based on tab
+    if (historyTab === 'all' || historyTab === 'active') {
+        if (data.active) trades = trades.concat(data.active);
+    }
+
+    if (historyTab === 'all' || historyTab === 'closed') {
+        if (data.closed) trades = trades.concat(data.closed);
+    }
+
+    if (trades.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="10" class="no-data">No trades found.</td></tr>';
+        return;
+    }
+
+    let html = '';
+    trades.forEach(trade => {
+        const isClosed = trade.status === 'CLOSED';
+        const pnlClass = trade.pnl >= 0 ? 'profit' : 'loss';
+        const pnlPrefix = trade.pnl >= 0 ? '+' : '';
+        const roiClass = trade.pnlPercent >= 0 ? 'profit' : 'loss';
+        const roiPrefix = trade.pnlPercent >= 0 ? '+' : '';
+
+        // Format duration
+        let durationStr = '-';
+        if (trade.durationSeconds) {
+            const mins = Math.floor(trade.durationSeconds / 60);
+            const secs = trade.durationSeconds % 60;
+            if (mins > 60) {
+                const hours = Math.floor(mins / 60);
+                durationStr = `${hours}h ${mins % 60}m`;
+            } else {
+                durationStr = `${mins}m ${secs}s`;
+            }
+        }
+
+        // Format time
+        const timeStr = new Date(trade.timestamp).toLocaleString();
+
+        html += `
+            <tr>
+                <td><span class="status-badge ${isClosed ? 'closed' : 'active'}">${trade.status}</span></td>
+                <td class="symbol">${trade.symbol}</td>
+                <td class="side ${trade.side.toLowerCase()}">${trade.side}</td>
+                <td>$${trade.entryPrice.toFixed(4)}</td>
+                <td>${trade.exitPrice ? '$' + trade.exitPrice.toFixed(4) : '-'}</td>
+                <td class="${pnlClass}">${pnlPrefix}$${trade.pnl.toFixed(2)}</td>
+                <td class="${roiClass}">${roiPrefix}${trade.pnlPercent.toFixed(2)}%</td>
+                <td>${durationStr}</td>
+                <td>${trade.exitReason || '-'}</td>
+                <td style="font-size: 0.85em; color: #7f8c8d;">${timeStr}</td>
+            </tr>
+        `;
+    });
+
+    tbody.innerHTML = html;
+}
+
+function switchHistoryTab(tab) {
+    historyTab = tab;
+    historyPage = 0; // Reset to first page
+
+    // Update buttons
+    document.querySelectorAll('.history-tabs .tab-btn').forEach(btn => {
+        btn.classList.remove('active');
+        if (btn.textContent.toLowerCase() === tab) {
+            btn.classList.add('active');
+        }
+    });
+
+    loadTradeHistory();
+}
+
+function nextHistoryPage() {
+    historyPage++;
+    loadTradeHistory();
+}
+
+function prevHistoryPage() {
+    if (historyPage > 0) {
+        historyPage--;
+        loadTradeHistory();
+    }
+}
+
+// Render metrics (Total PnL, Win Rate, Total Trades)
+function renderMetrics(stats) {
+    const totalPnL = stats.totalPnL || 0;
+    const winRate = stats.winRate || 0;
+    const totalTrades = stats.totalTrades || 0;
+
+    // Format and color Total PnL
+    const pnlColor = totalPnL >= 0 ? '#27ae60' : '#e74c3c';
+    const pnlSign = totalPnL >= 0 ? '+' : '';
+    document.getElementById('totalPnL').textContent = `${pnlSign}$${totalPnL.toFixed(2)}`;
+    document.getElementById('totalPnL').style.color = pnlColor;
+
+    // Format Win Rate
+    document.getElementById('winRate').textContent = `${winRate.toFixed(1)}%`;
+
+    // Total Trades
+    document.getElementById('totalTrades').textContent = totalTrades;
 }

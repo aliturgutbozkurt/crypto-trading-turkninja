@@ -3,12 +3,14 @@ package com.turkninja;
 import com.turkninja.config.Config;
 import com.turkninja.engine.*;
 import com.turkninja.infra.*;
+import com.turkninja.web.service.WebSocketPushService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Lazy;
 
 @SpringBootApplication
 public class App {
@@ -53,10 +55,12 @@ public class App {
             OrderBookService orderBookService,
             CorrelationService correlationService,
             InfluxDBService influxDBService,
-            TelegramNotifier telegramNotifier) {
+            TelegramNotifier telegramNotifier,
+            @Lazy WebSocketPushService webSocketPushService) {
         RiskManager manager = new RiskManager(null, futuresBinanceService, orderBookService, correlationService,
                 influxDBService, telegramNotifier);
         manager.setWebSocketService(webSocketService);
+        manager.setWebSocketPushService(webSocketPushService);
         return manager;
     }
 

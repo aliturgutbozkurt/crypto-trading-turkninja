@@ -2,13 +2,17 @@ package com.turkninja.web.controller;
 
 import com.turkninja.infra.FuturesBinanceService;
 import com.turkninja.infra.FuturesWebSocketService;
+import com.turkninja.infra.InfluxDBService;
 import com.turkninja.engine.PositionTracker;
 import com.turkninja.engine.RiskManager;
 import com.turkninja.engine.StrategyEngine;
 import com.turkninja.web.dto.PositionDTO;
 import com.turkninja.web.dto.AccountDTO;
+import com.turkninja.web.dto.TradeHistoryDTO;
 import org.json.JSONArray;
 import org.json.JSONObject;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.ArrayList;
@@ -18,23 +22,27 @@ import java.util.List;
 @RequestMapping("/api")
 @CrossOrigin(origins = "*")
 public class DashboardRestController {
+    private static final Logger logger = LoggerFactory.getLogger(DashboardRestController.class);
 
     private final FuturesBinanceService futuresService;
     private final FuturesWebSocketService webSocketService;
     private final PositionTracker positionTracker;
     private final RiskManager riskManager;
     private final StrategyEngine strategyEngine;
+    private final InfluxDBService influxDBService;
 
     public DashboardRestController(FuturesBinanceService futuresService,
             FuturesWebSocketService webSocketService,
             PositionTracker positionTracker,
             RiskManager riskManager,
-            StrategyEngine strategyEngine) {
+            StrategyEngine strategyEngine,
+            InfluxDBService influxDBService) {
         this.futuresService = futuresService;
         this.webSocketService = webSocketService;
         this.positionTracker = positionTracker;
         this.riskManager = riskManager;
         this.strategyEngine = strategyEngine;
+        this.influxDBService = influxDBService;
     }
 
     @GetMapping("/positions")
@@ -224,5 +232,82 @@ public class DashboardRestController {
             return strategyEngine.getRecentSignals();
         }
         return new ArrayList<>();
+    }
+
+    /**
+     * Get trade history with pagination
+     * Combines active positions and closed trades from InfluxDB
+     */
+    @GetMapping("/trade-history")
+    public java.util.Map<String, Object> getTradeHistory(
+            @RequestParam(defaultValue = "20") int limit,
+            @RequestParam(defaultValue = "0") int offset) {
+
+        try {
+            // Get closed trades from InfluxDB
+            List<TradeHistoryDTO> closedTrades = influxDBService != null
+                    ? influxDBService.queryRecentTrades(limit, offset)
+                    : new ArrayList<>();
+
+            // Get active positions from PositionTracker and convert to TradeHistoryDTO
+            List<TradeHistoryDTO> activeTrades = new ArrayList<>();
+            if (positionTracker != null) {
+                java.util.Map<String, PositionTracker.Position> activePositions = positionTracker.getAllPositions();
+
+                for (PositionTracker.Position pos : activePositions.values()) {
+                    // Get current mark price for P&L calculation
+                    double currentPrice = webSocketService != null
+                            ? webSocketService.getMarkPrice(pos.symbol)
+                            : 0.0;
+
+                    if (currentPrice > 0) {
+                        double pnl = positionTracker.calculateUnrealizedPnL(pos.symbol, currentPrice);
+                        double pnlPercent = ((currentPrice - pos.entryPrice) / pos.entryPrice) * 100;
+                        if (pos.side.equals("SELL")) {
+                            pnlPercent = -pnlPercent;
+                        }
+
+                        TradeHistoryDTO activeTrade = new TradeHistoryDTO(
+                                pos.symbol, pos.side, pos.entryPrice, null,
+                                pnl, pnlPercent, null, null,
+                                java.time.Instant.parse(pos.entryTime), "ACTIVE");
+
+                        activeTrades.add(activeTrade);
+                    }
+                }
+            }
+
+            long totalClosed = influxDBService != null ? influxDBService.getTotalTradeCount() : 0;
+
+            // Get aggregate metrics
+            java.util.Map<String, Object> metrics = influxDBService != null
+                    ? influxDBService.getAggregateMetrics()
+                    : java.util.Map.of(
+                            "totalPnL", 0.0,
+                            "winRate", 0.0,
+                            "totalTrades", 0L,
+                            "winningTrades", 0L);
+
+            return java.util.Map.of(
+                    "active", activeTrades,
+                    "closed", closedTrades,
+                    "totalClosed", totalClosed,
+                    "stats", metrics,
+                    "limit", limit,
+                    "offset", offset);
+
+        } catch (Exception e) {
+            logger.error("Error fetching trade history", e);
+            return java.util.Map.of(
+                    "active", new ArrayList<>(),
+                    "closed", new ArrayList<>(),
+                    "totalClosed", 0L,
+                    "stats", java.util.Map.of(
+                            "totalPnL", 0.0,
+                            "winRate", 0.0,
+                            "totalTrades", 0L,
+                            "winningTrades", 0L),
+                    "error", e.getMessage());
+        }
     }
 }

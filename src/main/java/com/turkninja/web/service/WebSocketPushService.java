@@ -7,6 +7,7 @@ import com.turkninja.web.dto.PositionDTO;
 import com.turkninja.web.dto.SignalDTO;
 import com.turkninja.web.socket.DashboardWebSocketHandler;
 import org.json.JSONObject;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
@@ -24,7 +25,7 @@ public class WebSocketPushService {
 
     public WebSocketPushService(FuturesWebSocketService binanceWebSocketService,
             DashboardWebSocketHandler dashboardWebSocketHandler,
-            DashboardRestController restController) {
+            @Lazy DashboardRestController restController) {
         this.binanceWebSocketService = binanceWebSocketService;
         this.dashboardWebSocketHandler = dashboardWebSocketHandler;
         this.restController = restController;
@@ -74,6 +75,36 @@ public class WebSocketPushService {
             JSONObject message = new JSONObject();
             message.put("type", "SIGNAL");
             message.put("signal", new JSONObject(signal));
+
+            dashboardWebSocketHandler.broadcast(message.toString());
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    /**
+     * Push trade close event to all connected clients
+     */
+    public void pushTradeClose(com.turkninja.web.dto.TradeHistoryDTO trade) {
+        try {
+            JSONObject message = new JSONObject();
+            message.put("type", "TRADE_CLOSE");
+            message.put("trade", new JSONObject(trade));
+
+            dashboardWebSocketHandler.broadcast(message.toString());
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    /**
+     * Push metrics update to all connected clients
+     */
+    public void pushMetrics(java.util.Map<String, Object> metrics) {
+        try {
+            JSONObject message = new JSONObject();
+            message.put("type", "METRICS_UPDATE");
+            message.put("metrics", new JSONObject(metrics));
 
             dashboardWebSocketHandler.broadcast(message.toString());
         } catch (Exception e) {

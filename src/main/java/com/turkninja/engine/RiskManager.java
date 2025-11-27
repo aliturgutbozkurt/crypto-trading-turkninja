@@ -5,6 +5,8 @@ import com.turkninja.infra.FuturesBinanceService;
 import com.turkninja.infra.FuturesWebSocketService;
 import com.turkninja.infra.InfluxDBService;
 import com.turkninja.infra.TelegramNotifier;
+import com.turkninja.web.service.WebSocketPushService;
+import com.turkninja.web.dto.TradeHistoryDTO;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -41,6 +43,7 @@ public class RiskManager {
     private final CorrelationService correlationService; // For correlation risk management
     private final InfluxDBService influxDBService; // Time-series data storage
     private final TelegramNotifier telegramNotifier; // Telegram notifications
+    private WebSocketPushService webSocketPushService; // For real-time dashboard updates
     private final ScheduledExecutorService monitoringExecutor;
     private volatile boolean monitoringActive = false;
 
@@ -98,17 +101,21 @@ public class RiskManager {
         this.PARTIAL_TP_THRESHOLD = Config.getDouble("risk.partial.tp.threshold", 0.003); // 0.3%
         this.PARTIAL_TP_CLOSE_PERCENT = Config.getDouble("risk.partial.tp.close.percent", 0.50); // 50%
 
-        // Load order book aware settings
-        this.ORDER_BOOK_AWARE_ENABLED = Boolean.parseBoolean(Config.get("risk.orderbook.enabled", "true"));
+        // Order Book Aware Stop Settings
+        this.ORDER_BOOK_AWARE_ENABLED = Boolean.parseBoolean(Config.get("risk.orderbook.aware.enabled", "true"));
 
         // Load correlation filter settings
-        this.correlationFilterEnabled = Boolean.parseBoolean(Config.get("risk.correlation.enabled", "true"));
-        this.correlationThreshold = Config.getDouble("risk.correlation.threshold", 0.75);
-        this.minPositionsForCorrelation = Config.getInt("risk.correlation.min.positions", 3);
+        this.correlationFilterEnabled = Boolean.parseBoolean(Config.get("risk.correlation.filter.enabled", "false"));
+        this.correlationThreshold = Config.getDouble("risk.correlation.threshold", 0.7);
+        this.minPositionsForCorrelation = Config.getInt("risk.correlation.min_positions", 3);
 
         logger.info(
                 "RiskManager initialized with SL/TP automation (Max Position: ${}, Max Concurrent: {}, Daily Loss Limit: ${}, OrderBook Aware: {})",
                 maxPositionSizeUsdt, maxConcurrentPositions, dailyLossLimit, ORDER_BOOK_AWARE_ENABLED);
+    }
+
+    public void setWebSocketPushService(WebSocketPushService webSocketPushService) {
+        this.webSocketPushService = webSocketPushService;
     }
 
     public void setPositionTracker(PositionTracker positionTracker) {
@@ -310,16 +317,27 @@ public class RiskManager {
                 try {
                     double partialPnl = (profitPercent / 100) * position.entryPrice
                             * (position.quantity * closePercent);
+                    long durationSeconds = java.time.Duration.between(
+                            java.time.Instant.parse(position.entryTime),
+                            java.time.Instant.now()).getSeconds();
+
                     influxDBService.writePositionClose(
                             symbol,
                             position.side,
                             currentPrice,
                             partialPnl,
                             "PARTIAL_TP",
-                            java.time.Duration.between(
-                                    java.time.Instant.parse(position.entryTime),
-                                    java.time.Instant.now()).getSeconds(),
+                            durationSeconds,
                             java.time.Instant.now());
+
+                    // Push to WebSocket
+                    if (webSocketPushService != null) {
+                        TradeHistoryDTO trade = new TradeHistoryDTO(
+                                symbol, position.side, position.entryPrice, currentPrice,
+                                partialPnl, profitPercent, "PARTIAL_TP", durationSeconds, java.time.Instant.now(),
+                                "CLOSED");
+                        webSocketPushService.pushTradeClose(trade);
+                    }
                 } catch (Exception e) {
                     logger.warn("Failed to record partial TP to InfluxDB: {}", e.getMessage());
                 }
@@ -527,9 +545,22 @@ public class RiskManager {
             }
 
             // Record position close to InfluxDB
+            // Record position close to InfluxDB
             if (influxDBService != null && influxDBService.isEnabled()) {
                 influxDBService.writePositionClose(symbol, position.side, currentPrice, pnl, reason,
                         durationSeconds, java.time.Instant.now());
+
+                // Push to WebSocket
+                if (webSocketPushService != null) {
+                    TradeHistoryDTO trade = new TradeHistoryDTO(
+                            symbol, position.side, position.entryPrice, currentPrice,
+                            pnl, pnlPercent, reason, durationSeconds, java.time.Instant.now(), "CLOSED");
+                    webSocketPushService.pushTradeClose(trade);
+
+                    // Push updated metrics
+                    java.util.Map<String, Object> metrics = influxDBService.getAggregateMetrics();
+                    webSocketPushService.pushMetrics(metrics);
+                }
             }
 
             if (pnl < 0) {
