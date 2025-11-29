@@ -19,6 +19,7 @@ import java.time.*;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Backtest Engine
@@ -103,6 +104,16 @@ public class BacktestEngine {
 
         double peak = initialBalance;
 
+        // Optimize: Pre-calculate indicators for O(N) performance
+        try {
+            Map<String, org.ta4j.core.Indicator<org.ta4j.core.num.Num>> indicators = indicatorService
+                    .getIndicators(series);
+            strategyEngine.setCachedIndicators(indicators);
+            logger.info("✅ Indicators pre-calculated for optimization");
+        } catch (Exception e) {
+            logger.warn("Failed to pre-calculate indicators, falling back to slow mode: {}", e.getMessage());
+        }
+
         // Simulation Loop
         for (int i = 0; i < history.size(); i++) {
             Bar bar = history.get(i);
@@ -148,8 +159,11 @@ public class BacktestEngine {
         try {
             mockFuturesService.closePosition(symbol);
         } catch (Exception e) {
-            logger.debug("No position to close at end of backtest");
+            // Ignore
         }
+
+        // Clear cached indicators to prevent side effects
+        strategyEngine.setCachedIndicators(null);
 
         // Finalize Report
         report.finalBalance = mockFuturesService.getVirtualBalance();
@@ -161,8 +175,8 @@ public class BacktestEngine {
         // Calculate all metrics
         report.calculateMetrics();
 
-        logger.info("🏁 Backtest complete. Net Profit: ${:.2f} ({:.2f}%)",
-                report.netProfit, report.getNetProfitPercent());
+        logger.info("🏁 Backtest complete. Net Profit: ${:.2f} ({:.2f}%)", report.netProfit,
+                report.getNetProfitPercent());
 
         return report;
     }

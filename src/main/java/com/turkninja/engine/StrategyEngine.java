@@ -53,8 +53,8 @@ public class StrategyEngine {
     // Top performers: AVAXUSDT (+1.55%), BTCUSDT (-1.72%), Others for
     // diversification
     private List<String> tradingSymbols = Arrays.asList(
-            "AVAXUSDT", "BTCUSDT", "ETHUSDT", "SOLUSDT", "DOGEUSDT",
-            "XRPUSDT", "DOTUSDT", "LINKUSDT", "BNBUSDT");
+            "BTCUSDT", "ETHUSDT", "SOLUSDT", "AVAXUSDT", "DOGEUSDT",
+            "XRPUSDT", "MATICUSDT", "LTCUSDT", "ETCUSDT", "SUIUSDT");
 
     private ScheduledExecutorService tradingScheduler;
     private ScheduledExecutorService batchProcessor; // Processes batched signals
@@ -72,6 +72,9 @@ public class StrategyEngine {
 
     // Strategy Filters (Phase 2 - Chain of Responsibility)
     private final List<StrategyCriteria> strategyFilters;
+
+    // Backtest Optimization
+    private Map<String, org.ta4j.core.Indicator<org.ta4j.core.num.Num>> cachedIndicators;
 
     public StrategyEngine(FuturesWebSocketService webSocketService,
             FuturesBinanceService binanceService,
@@ -428,7 +431,25 @@ public class StrategyEngine {
             // Calculate indicators once (used by all filters and strategies)
             // Uses 15m data, hybrid strategy chooses between Trend-Following vs
             // Mean-Reversion
-            Map<String, Double> indicators15m = indicatorService.calculateIndicators(series15m);
+            Map<String, Double> indicators15m;
+
+            if (cachedIndicators != null) {
+                // Optimized path for backtest (O(N))
+                indicators15m = new HashMap<>();
+                int endIndex = series15m.getEndIndex();
+
+                for (Map.Entry<String, org.ta4j.core.Indicator<org.ta4j.core.num.Num>> entry : cachedIndicators
+                        .entrySet()) {
+                    indicators15m.put(entry.getKey(), entry.getValue().getValue(endIndex).doubleValue());
+                }
+
+                // Add derived values that might be missing if not in cached set
+                // (Currently getIndicators returns all needed, but safe to check)
+            } else {
+                // Standard path for live trading (recalculates)
+                indicators15m = indicatorService.calculateIndicators(series15m);
+            }
+
             double currentPrice = series15m.getLastBar().getClosePrice().doubleValue();
 
             // ----- STEP 2: Market Regime Detection -----
@@ -748,7 +769,8 @@ public class StrategyEngine {
             double positionSize = availableBalance * maxPercent;
 
             // Cap at risk manager's max position size
-            positionSize = Math.min(positionSize, 100.0); // $100 max from RiskManager
+            double maxPositionSize = Config.getDouble("risk.max_position_size", 1000.0);
+            positionSize = Math.min(positionSize, maxPositionSize);
 
             // Apply Regime Multiplier (Hybrid Strategy)
             if (regime != null) {
@@ -921,7 +943,12 @@ public class StrategyEngine {
                 }
             }
 
-            indicatorService.addBar(series, time, open, high, low, close, volume);
+            try {
+                indicatorService.addBar(series, time, open, high, low, close, volume);
+            } catch (IllegalArgumentException e) {
+                // Ignore duplicate bars or bars with time <= last bar time
+                // This can happen if the check above fails due to time zone differences
+            }
         }
         return series;
     }
@@ -1117,6 +1144,10 @@ public class StrategyEngine {
     public void setAsyncExecution(boolean enabled) {
         this.asyncExecutionEnabled = enabled;
         logger.info("Async execution set to: {}", enabled);
+    }
+
+    public void setCachedIndicators(Map<String, org.ta4j.core.Indicator<org.ta4j.core.num.Num>> cachedIndicators) {
+        this.cachedIndicators = cachedIndicators;
     }
 
     public void shutdown() {

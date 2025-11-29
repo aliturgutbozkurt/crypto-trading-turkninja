@@ -22,9 +22,7 @@ public class QuickBacktestRunner {
     // All trading symbols
     private static final List<String> ALL_SYMBOLS = Arrays.asList(
             "BTCUSDT", "ETHUSDT", "SOLUSDT", "AVAXUSDT", "DOGEUSDT",
-            "XRPUSDT", "DOTUSDT", "LINKUSDT", "BNBUSDT", "ADAUSDT",
-            "NEARUSDT", "MATICUSDT", "LTCUSDT", "ETCUSDT", "ATOMUSDT",
-            "ARBUSDT", "OPUSDT", "SUIUSDT", "APTUSDT", "INJUSDT");
+            "XRPUSDT", "MATICUSDT", "LTCUSDT", "ETCUSDT", "SUIUSDT");
 
     public static void main(String[] args) {
         String startDate = "2025-10-27"; // 1 month ago (updated to current year)
@@ -55,61 +53,6 @@ public class QuickBacktestRunner {
             FuturesBinanceService realBinanceService = new FuturesBinanceService(true); // Skip init for backtest
             IndicatorService indicatorService = new IndicatorService();
 
-            // 2. Initialize Mock Services for StrategyEngine
-            MockFuturesBinanceService mockService = new MockFuturesBinanceService(1000.0);
-
-            // Mock WebSocket Service
-            FuturesWebSocketService mockWebSocketService = new FuturesWebSocketService("mockKey", "mockSecret") {
-                @Override
-                public void startUserDataStream() {
-                }
-
-                @Override
-                public void startKlineStream(List<String> symbols) {
-                }
-
-                @Override
-                public void startDepthStream(List<String> symbols) {
-                }
-            };
-
-            // Mock OrderBook Service - NULL for backtest (no live order book data)
-            OrderBookService mockOrderBookService = null;
-
-            // Correlation Service (uses real binance service for history)
-            CorrelationService correlationService = new CorrelationService(realBinanceService);
-
-            // 3. Initialize Dependencies with Circular Dependency Resolution
-
-            // Step A: Create RiskManager // Initialize Services
-            RiskManager riskManager = new RiskManager(null, mockService, mockOrderBookService, correlationService,
-                    null, null); // null InfluxDB and TelegramNotifier for backtest
-            PositionTracker positionTracker = new PositionTracker(riskManager);
-            riskManager.setPositionTracker(positionTracker);
-
-            // Mock Telegram
-            TelegramNotifier mockTelegram = new TelegramNotifier() {
-                public void sendMessage(String message) {
-                }
-
-                public void sendAlert(AlertLevel level, String message) {
-                }
-            };
-
-            // 4. Create StrategyEngine
-            StrategyEngine strategyEngine = new StrategyEngine(
-                    mockWebSocketService,
-                    mockService, // Use Mock Service!
-                    indicatorService,
-                    riskManager,
-                    positionTracker,
-                    mockOrderBookService,
-                    mockTelegram,
-                    null);
-
-            // Disable async execution for backtest (CRITICAL for correct simulation)
-            strategyEngine.setAsyncExecution(false);
-
             List<BacktestReport> allReports = new ArrayList<>();
 
             // Run backtest for each symbol
@@ -121,10 +64,46 @@ public class QuickBacktestRunner {
                 logger.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
                 try {
-                    // Reset mock service for each symbol
-                    mockService.reset(1000.0);
+                    // Re-initialize all mock services for each symbol to ensure clean state
+                    MockFuturesBinanceService mockService = new MockFuturesBinanceService(1000.0);
 
-                    // Create BacktestEngine with the fully initialized StrategyEngine
+                    // Mock WebSocket
+                    FuturesWebSocketService mockWebSocketService = new FuturesWebSocketService("mockKey",
+                            "mockSecret") {
+                        @Override
+                        public void startUserDataStream() {
+                        }
+
+                        @Override
+                        public void startKlineStream(List<String> symbols) {
+                        }
+
+                        @Override
+                        public void startDepthStream(List<String> symbols) {
+                        }
+                    };
+
+                    // Dependencies
+                    CorrelationService correlationService = new CorrelationService(realBinanceService);
+                    RiskManager riskManager = new RiskManager(null, mockService, null, correlationService, null, null);
+                    PositionTracker positionTracker = new PositionTracker(riskManager);
+                    riskManager.setPositionTracker(positionTracker);
+
+                    TelegramNotifier mockTelegram = new TelegramNotifier() {
+                        public void sendMessage(String message) {
+                        }
+
+                        public void sendAlert(AlertLevel level, String message) {
+                        }
+                    };
+
+                    StrategyEngine strategyEngine = new StrategyEngine(
+                            mockWebSocketService, mockService, indicatorService, riskManager,
+                            positionTracker, null, mockTelegram, null);
+
+                    strategyEngine.setAsyncExecution(false);
+
+                    // Create BacktestEngine
                     BacktestEngine backtestEngine = new BacktestEngine(
                             strategyEngine, mockService, realBinanceService, indicatorService);
 

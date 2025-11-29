@@ -10,7 +10,7 @@ import org.ta4j.core.indicators.bollinger.BollingerBandsMiddleIndicator;
 import org.ta4j.core.indicators.bollinger.BollingerBandsUpperIndicator;
 import org.ta4j.core.indicators.helpers.ClosePriceIndicator;
 import org.ta4j.core.indicators.statistics.StandardDeviationIndicator;
-import org.ta4j.core.num.DoubleNum;
+import org.ta4j.core.num.DecimalNum;
 import org.ta4j.core.num.Num;
 import org.ta4j.core.Bar;
 import org.ta4j.core.BaseBar;
@@ -25,16 +25,60 @@ import java.util.Map;
 
 public class IndicatorService {
 
+    /**
+     * Calculate and return raw Indicator objects for caching/optimization
+     * This allows getting values at any index without recreating indicators
+     */
+    public Map<String, org.ta4j.core.Indicator<Num>> getIndicators(BarSeries series) {
+        Map<String, org.ta4j.core.Indicator<Num>> indicators = new HashMap<>();
+        ClosePriceIndicator closePrice = new ClosePriceIndicator(series);
+
+        // RSI
+        RSIIndicator rsi = new RSIIndicator(closePrice, 14);
+        indicators.put("RSI", rsi);
+
+        // MACD
+        MACDIndicator macd = new MACDIndicator(closePrice, 12, 26);
+        EMAIndicator macdSignal = new EMAIndicator(macd, 9);
+        indicators.put("MACD", macd);
+        indicators.put("MACD_SIGNAL", macdSignal);
+
+        // Bollinger Bands
+        EMAIndicator avg20 = new EMAIndicator(closePrice, 20);
+        StandardDeviationIndicator sd20 = new StandardDeviationIndicator(closePrice, 20);
+        BollingerBandsMiddleIndicator middleBB = new BollingerBandsMiddleIndicator(avg20);
+        BollingerBandsLowerIndicator lowerBB = new BollingerBandsLowerIndicator(middleBB, sd20);
+        BollingerBandsUpperIndicator upperBB = new BollingerBandsUpperIndicator(middleBB, sd20);
+        indicators.put("BB_LOWER", lowerBB);
+        indicators.put("BB_MIDDLE", middleBB);
+        indicators.put("BB_UPPER", upperBB);
+
+        // EMAs
+        indicators.put("EMA_9", new EMAIndicator(closePrice, 9));
+        indicators.put("EMA_21", new EMAIndicator(closePrice, 21));
+        indicators.put("EMA_50", new EMAIndicator(closePrice, 50));
+        indicators.put("EMA_200", new EMAIndicator(closePrice, 200));
+
+        // ADX
+        indicators.put("ADX", new org.ta4j.core.indicators.adx.ADXIndicator(series, 14));
+
+        // ATR
+        indicators.put("ATR", new org.ta4j.core.indicators.ATRIndicator(series, 14));
+
+        return indicators;
+    }
+
     public Map<String, Double> calculateIndicators(BarSeries series) {
         Map<String, Double> results = new HashMap<>();
         if (series.getBarCount() == 0)
             return results;
 
         ClosePriceIndicator closePrice = new ClosePriceIndicator(series);
+        int endIndex = series.getEndIndex();
 
         // RSI
         RSIIndicator rsi = new RSIIndicator(closePrice, 14);
-        double currentRSI = rsi.getValue(series.getEndIndex()).doubleValue();
+        double currentRSI = rsi.getValue(endIndex).doubleValue();
         results.put("RSI", currentRSI);
 
         // RSI Bands (Bollinger Bands applied to RSI values)
@@ -237,17 +281,20 @@ public class IndicatorService {
         // Convert ZonedDateTime to Instant for ta4j 0.19 compatibility
         Instant instant = time.toInstant();
 
-        // Use DoubleNum directly
+        // Fix: Use null duration to avoid time period validation error (ta4j 0.19)
+        // Use DecimalNum for consistency with BarSeries default type
         Duration duration = Duration.ofMinutes(15);
-        Bar bar = new BaseBar(duration,
+        Instant beginTime = instant.minus(duration);
+
+        Bar bar = new BaseBar(null, // Let ta4j calculate duration internally
                 instant, // endTime
-                instant.minus(duration), // beginTime
-                DoubleNum.valueOf(open),
-                DoubleNum.valueOf(high),
-                DoubleNum.valueOf(low),
-                DoubleNum.valueOf(close),
-                DoubleNum.valueOf(volume),
-                DoubleNum.valueOf(0), // amount
+                beginTime, // beginTime
+                DecimalNum.valueOf(open),
+                DecimalNum.valueOf(high),
+                DecimalNum.valueOf(low),
+                DecimalNum.valueOf(close),
+                DecimalNum.valueOf(volume),
+                DecimalNum.valueOf(0), // amount
                 0L); // trades
 
         series.addBar(bar);

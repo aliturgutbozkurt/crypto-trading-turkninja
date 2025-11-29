@@ -10,6 +10,9 @@ document.addEventListener('DOMContentLoaded', function () {
 
     // Auto-reload data every 1 second (Polling fallback)
     setInterval(loadData, 1000);
+
+    // Auto-reload positions from Binance every 10 seconds
+    setInterval(reloadPositions, 10000);
 });
 
 // Wrapper to load both account and positions
