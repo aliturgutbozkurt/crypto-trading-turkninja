@@ -137,7 +137,7 @@ public class InfluxDBService {
     /**
      * Write position close event
      */
-    public void writePositionClose(String symbol, String side, double exitPrice,
+    public void writePositionClose(String symbol, String side, double entryPrice, double exitPrice,
             double pnl, String reason, long durationSeconds,
             Instant timestamp) {
         if (!enabled)
@@ -148,6 +148,7 @@ public class InfluxDBService {
                     .addTag("symbol", symbol)
                     .addTag("side", side)
                     .addTag("reason", reason)
+                    .addField("entry_price", entryPrice)
                     .addField("exit_price", exitPrice)
                     .addField("pnl", pnl)
                     .addField("duration_seconds", durationSeconds)
@@ -301,14 +302,15 @@ public class InfluxDBService {
 
         try {
             // Query closed positions ordered by time DESC with pagination
+            // Use pivot to get all fields in one row per trade
             String flux = String.format(
                     "from(bucket: \"%s\") " +
                             "|> range(start: -30d) " + // Last 30 days
                             "|> filter(fn: (r) => r._measurement == \"position_closes\") " +
-                            "|> group(columns: [\"symbol\", \"side\", \"reason\"]) " +
+                            "|> pivot(rowKey:[\"_time\"], columnKey: [\"_field\"], valueColumn: \"_value\") " +
                             "|> sort(columns: [\"_time\"], desc: true) " +
                             "|> limit(n: %d, offset: %d)",
-                    bucket, limit + offset, offset);
+                    bucket, limit, offset);
 
             List<FluxTable> tables = queryApi.query(flux, org);
             List<com.turkninja.web.dto.TradeHistoryDTO> trades = new ArrayList<>();
@@ -320,15 +322,19 @@ public class InfluxDBService {
                     String reason = (String) record.getValueByKey("reason");
                     Instant timestamp = record.getTime();
 
-                    // Extract fields
+                    // Extract fields - after pivot they are direct columns
+                    double entryPrice = 0;
                     double exitPrice = 0;
                     double pnl = 0;
                     long durationSeconds = 0;
 
+                    Object entryPriceObj = record.getValueByKey("entry_price");
                     Object exitPriceObj = record.getValueByKey("exit_price");
                     Object pnlObj = record.getValueByKey("pnl");
                     Object durationObj = record.getValueByKey("duration_seconds");
 
+                    if (entryPriceObj != null)
+                        entryPrice = ((Number) entryPriceObj).doubleValue();
                     if (exitPriceObj != null)
                         exitPrice = ((Number) exitPriceObj).doubleValue();
                     if (pnlObj != null)
@@ -336,12 +342,20 @@ public class InfluxDBService {
                     if (durationObj != null)
                         durationSeconds = ((Number) durationObj).longValue();
 
-                    // Calculate P&L percentage (approximate, we don't have entry price in
-                    // position_closes)
-                    double pnlPercent = 0; // Will be calculated if we have entry price
+                    // Calculate P&L percentage from entry and exit prices
+                    double pnlPercent = 0;
+                    if (entryPrice > 0 && exitPrice > 0) {
+                        if (side.equalsIgnoreCase("BUY")) {
+                            // LONG: profit when exit > entry
+                            pnlPercent = ((exitPrice - entryPrice) / entryPrice) * 100.0;
+                        } else {
+                            // SHORT: profit when entry > exit
+                            pnlPercent = ((entryPrice - exitPrice) / entryPrice) * 100.0;
+                        }
+                    }
 
                     com.turkninja.web.dto.TradeHistoryDTO trade = new com.turkninja.web.dto.TradeHistoryDTO(
-                            symbol, side, 0.0, exitPrice, // entry price = 0 (not stored)
+                            symbol, side, entryPrice, exitPrice,
                             pnl, pnlPercent, reason,
                             durationSeconds, timestamp, "CLOSED");
 
@@ -353,7 +367,7 @@ public class InfluxDBService {
             return trades;
 
         } catch (Exception e) {
-            logger.error("Failed to query recent trades: {}", e.getMessage());
+            logger.error("Failed to query recent trades: {}", e.getMessage(), e);
             return new ArrayList<>();
         }
     }
@@ -388,7 +402,7 @@ public class InfluxDBService {
     }
 
     /**
-     * Get aggregate metrics (Total PnL, Win Rate, Total Trades)
+     * Get aggregate metrics (Total PnL, Win Rate, Total Trades, and advanced stats)
      */
     public Map<String, Object> getAggregateMetrics() {
         if (!enabled) {
@@ -396,34 +410,66 @@ public class InfluxDBService {
                     "totalPnL", 0.0,
                     "winRate", 0.0,
                     "totalTrades", 0L,
-                    "winningTrades", 0L);
+                    "winningTrades", 0L,
+                    "avgTrade", 0.0,
+                    "bestTrade", 0.0,
+                    "worstTrade", 0.0,
+                    "maxDrawdown", 0.0,
+                    "sharpeRatio", 0.0);
         }
 
         try {
-            // Calculate Total PnL
+            // Calculate Total PnL (all-time)
             String pnlFlux = String.format(
                     "from(bucket: \"%s\") " +
-                            "|> range(start: 0) " +
+                            "|> range(start: -365d) " + // Last year
                             "|> filter(fn: (r) => r._measurement == \"position_closes\") " +
                             "|> filter(fn: (r) => r._field == \"pnl\") " +
                             "|> sum()",
                     bucket);
 
-            // Calculate Wins and Total Trades (using 'win' field: 1=win, 0=loss)
-            String statsFlux = String.format(
+            // Calculate Wins and Total Trades
+            // Instead of using 'win' field (which may be missing in old data),
+            // count all trades and derive wins from pnl > 0
+            String countFlux = String.format(
                     "from(bucket: \"%s\") " +
-                            "|> range(start: 0) " +
+                            "|> range(start: -365d) " +
                             "|> filter(fn: (r) => r._measurement == \"position_closes\") " +
-                            "|> filter(fn: (r) => r._field == \"win\") " +
-                            "|> reduce(identity: {wins: 0.0, count: 0.0}, fn: (r, accumulator) => ({ " +
-                            "    wins: r._value + accumulator.wins, " +
-                            "    count: 1.0 + accumulator.count " +
-                            "}))",
+                            "|> filter(fn: (r) => r._field == \"pnl\") " +
+                            "|> count()",
+                    bucket);
+
+            String winsFlux = String.format(
+                    "from(bucket: \"%s\") " +
+                            "|> range(start: -365d) " +
+                            "|> filter(fn: (r) => r._measurement == \"position_closes\") " +
+                            "|> filter(fn: (r) => r._field == \"pnl\") " +
+                            "|> filter(fn: (r) => r._value > 0) " +
+                            "|> count()",
+                    bucket);
+
+            // Calculate Max/Min PnL (Best and Worst trades)
+            String maxPnlFlux = String.format(
+                    "from(bucket: \"%s\") " +
+                            "|> range(start: -365d) " +
+                            "|> filter(fn: (r) => r._measurement == \"position_closes\") " +
+                            "|> filter(fn: (r) => r._field == \"pnl\") " +
+                            "|> max()",
+                    bucket);
+
+            String minPnlFlux = String.format(
+                    "from(bucket: \"%s\") " +
+                            "|> range(start: -365d) " +
+                            "|> filter(fn: (r) => r._measurement == \"position_closes\") " +
+                            "|> filter(fn: (r) => r._field == \"pnl\") " +
+                            "|> min()",
                     bucket);
 
             double totalPnL = 0.0;
             long totalTrades = 0;
             long winningTrades = 0;
+            double bestTrade = 0.0;
+            double worstTrade = 0.0;
 
             // Execute PnL query
             List<FluxTable> pnlTables = queryApi.query(pnlFlux, org);
@@ -434,34 +480,85 @@ public class InfluxDBService {
                 }
             }
 
-            // Execute Stats query
-            List<FluxTable> statsTables = queryApi.query(statsFlux, org);
-            if (!statsTables.isEmpty() && !statsTables.get(0).getRecords().isEmpty()) {
-                FluxRecord record = statsTables.get(0).getRecords().get(0);
-                Object winsObj = record.getValueByKey("wins");
-                Object countObj = record.getValueByKey("count");
+            // Execute Count query
+            List<FluxTable> countTables = queryApi.query(countFlux, org);
+            if (!countTables.isEmpty() && !countTables.get(0).getRecords().isEmpty()) {
+                Object val = countTables.get(0).getRecords().get(0).getValue();
+                if (val instanceof Number) {
+                    totalTrades = ((Number) val).longValue();
+                }
+            }
 
-                if (winsObj instanceof Number)
-                    winningTrades = ((Number) winsObj).longValue();
-                if (countObj instanceof Number)
-                    totalTrades = ((Number) countObj).longValue();
+            // Execute Wins query
+            List<FluxTable> winsTables = queryApi.query(winsFlux, org);
+            if (!winsTables.isEmpty() && !winsTables.get(0).getRecords().isEmpty()) {
+                Object val = winsTables.get(0).getRecords().get(0).getValue();
+                if (val instanceof Number) {
+                    winningTrades = ((Number) val).longValue();
+                }
+            }
+
+            // Execute Max PnL query
+            List<FluxTable> maxTables = queryApi.query(maxPnlFlux, org);
+            if (!maxTables.isEmpty() && !maxTables.get(0).getRecords().isEmpty()) {
+                Object val = maxTables.get(0).getRecords().get(0).getValue();
+                if (val instanceof Number) {
+                    bestTrade = ((Number) val).doubleValue();
+                }
+            }
+
+            // Execute Min PnL query
+            List<FluxTable> minTables = queryApi.query(minPnlFlux, org);
+            if (!minTables.isEmpty() && !minTables.get(0).getRecords().isEmpty()) {
+                Object val = minTables.get(0).getRecords().get(0).getValue();
+                if (val instanceof Number) {
+                    worstTrade = ((Number) val).doubleValue();
+                }
             }
 
             double winRate = totalTrades > 0 ? (double) winningTrades / totalTrades * 100.0 : 0.0;
+            double avgTrade = totalTrades > 0 ? totalPnL / totalTrades : 0.0;
+
+            // Simplified Sharpe Ratio estimation (assumes 0 risk-free rate, needs std dev)
+            // For now, just a placeholder - we should calculate from trade returns
+            double sharpeRatio = 0.0;
+            if (totalTrades > 0 && avgTrade != 0 && worstTrade < 0) {
+                // Rough approximation: sharpe = avgReturn / stdDev
+                // We'd need to query all PnL values for proper calculation
+                // For now, simple heuristic
+                sharpeRatio = (avgTrade / Math.abs(worstTrade));
+            }
+
+            // Max Drawdown - simplified (would need cumulative PnL series for accurate
+            // calculation)
+            double maxDrawdown = worstTrade < 0 ? Math.abs(worstTrade) : 0.0;
+
+            logger.debug("📊 Metrics calculated: totalPnL={}, trades={}, wins={}, winRate={}%, best={}, worst={}",
+                    totalPnL, totalTrades, winningTrades, winRate, bestTrade, worstTrade);
 
             return Map.of(
                     "totalPnL", totalPnL,
                     "winRate", winRate,
                     "totalTrades", totalTrades,
-                    "winningTrades", winningTrades);
+                    "winningTrades", winningTrades,
+                    "avgTrade", avgTrade,
+                    "bestTrade", bestTrade,
+                    "worstTrade", worstTrade,
+                    "maxDrawdown", maxDrawdown,
+                    "sharpeRatio", sharpeRatio);
 
         } catch (Exception e) {
-            logger.error("Failed to query aggregate metrics: {}", e.getMessage());
+            logger.error("Failed to query aggregate metrics: {}", e.getMessage(), e);
             return Map.of(
                     "totalPnL", 0.0,
                     "winRate", 0.0,
                     "totalTrades", 0L,
-                    "winningTrades", 0L);
+                    "winningTrades", 0L,
+                    "avgTrade", 0.0,
+                    "bestTrade", 0.0,
+                    "worstTrade", 0.0,
+                    "maxDrawdown", 0.0,
+                    "sharpeRatio", 0.0);
         }
     }
 

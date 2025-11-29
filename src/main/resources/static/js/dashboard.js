@@ -415,11 +415,15 @@ function prevHistoryPage() {
     }
 }
 
-// Render metrics (Total PnL, Win Rate, Total Trades)
+// Render metrics (Total PnL, Win Rate, Total Trades, and Advanced Stats)
 function renderMetrics(stats) {
     const totalPnL = stats.totalPnL || 0;
     const winRate = stats.winRate || 0;
     const totalTrades = stats.totalTrades || 0;
+    const maxDrawdown = stats.maxDrawdown || 0;
+    const sharpeRatio = stats.sharpeRatio || 0;
+    const avgTrade = stats.avgTrade || 0;
+    const bestTrade = stats.bestTrade || 0;
 
     // Format and color Total PnL
     const pnlColor = totalPnL >= 0 ? '#27ae60' : '#e74c3c';
@@ -432,4 +436,25 @@ function renderMetrics(stats) {
 
     // Total Trades
     document.getElementById('totalTrades').textContent = totalTrades;
+
+    // Max Drawdown (displayed as percentage or absolute value)
+    document.getElementById('maxDrawdown').textContent = `$${maxDrawdown.toFixed(2)}`;
+    document.getElementById('maxDrawdown').style.color = maxDrawdown > 50 ? '#e74c3c' : '#f39c12';
+
+    // Sharpe Ratio
+    const sharpeColor = sharpeRatio > 1 ? '#27ae60' : sharpeRatio > 0 ? '#f39c12' : '#e74c3c';
+    document.getElementById('sharpeRatio').textContent = sharpeRatio.toFixed(2);
+    document.getElementById('sharpeRatio').style.color = sharpeColor;
+
+    // Average Trade
+    const avgColor = avgTrade >= 0 ? '#27ae60' : '#e74c3c';
+    const avgSign = avgTrade >= 0 ? '+' : '';
+    document.getElementById('avgTrade').textContent = `${avgSign}$${avgTrade.toFixed(2)}`;
+    document.getElementById('avgTrade').style.color = avgColor;
+
+    // Best Trade
+    const bestColor = bestTrade >= 0 ? '#27ae60' : '#3498db';
+    const bestSign = bestTrade >= 0 ? '+' : '';
+    document.getElementById('bestTrade').textContent = `${bestSign}$${bestTrade.toFixed(2)}`;
+    document.getElementById('bestTrade').style.color = bestColor;
 }

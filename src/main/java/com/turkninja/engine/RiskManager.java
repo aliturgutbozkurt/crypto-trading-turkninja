@@ -330,6 +330,7 @@ public class RiskManager {
                     influxDBService.writePositionClose(
                             symbol,
                             position.side,
+                            position.entryPrice,
                             currentPrice,
                             partialPnl,
                             "PARTIAL_TP",
@@ -553,7 +554,8 @@ public class RiskManager {
             // Record position close to InfluxDB
             // Record position close to InfluxDB
             if (influxDBService != null && influxDBService.isEnabled()) {
-                influxDBService.writePositionClose(symbol, position.side, currentPrice, pnl, reason,
+                influxDBService.writePositionClose(symbol, position.side, position.entryPrice, currentPrice, pnl,
+                        reason,
                         durationSeconds, java.time.Instant.now());
 
                 // Push to WebSocket
