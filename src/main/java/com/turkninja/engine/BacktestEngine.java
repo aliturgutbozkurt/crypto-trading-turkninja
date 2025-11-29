@@ -9,9 +9,11 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.ta4j.core.Bar;
 import org.ta4j.core.BarSeries;
+import org.ta4j.core.BaseBar;
 import org.ta4j.core.BaseBarSeries;
 import org.ta4j.core.BaseBarSeriesBuilder;
 import org.ta4j.core.num.DecimalNum;
+import org.ta4j.core.num.DoubleNum;
 
 import java.time.*;
 import java.time.format.DateTimeFormatter;
@@ -90,14 +92,13 @@ public class BacktestEngine {
         report.timeframe = timeframe;
         report.initialBalance = initialBalance;
         if (!history.isEmpty()) {
-            report.startTime = history.get(0).getEndTime();
-            report.endTime = history.get(history.size() - 1).getEndTime();
+            report.startTime = history.get(0).getEndTime().atZone(ZoneId.of("UTC"));
+            report.endTime = history.get(history.size() - 1).getEndTime().atZone(ZoneId.of("UTC"));
         }
 
-        // Build BarSeries with DecimalNum
+        // Build BarSeries
         BarSeries series = new BaseBarSeriesBuilder()
                 .withName(symbol)
-                .withNumTypeOf(DecimalNum.class)
                 .build();
 
         double peak = initialBalance;
@@ -134,7 +135,7 @@ public class BacktestEngine {
                 double drawdown = currentEquity < peak ? ((peak - currentEquity) / peak) * 100 : 0;
 
                 report.equityCurve.add(new BacktestReport.EquityPoint(
-                        bar.getEndTime(), currentEquity, drawdown));
+                        bar.getEndTime().atZone(ZoneId.of("UTC")), currentEquity, drawdown));
 
                 if (i % 500 == 0) { // Log progress every 500 bars
                     logger.info("📊 Progress: {}/{} bars, Equity: ${:.2f}",
@@ -227,7 +228,6 @@ public class BacktestEngine {
             // Create BarSeries
             BarSeries series = new BaseBarSeriesBuilder()
                     .withName(symbol)
-                    .withNumTypeOf(DecimalNum.class)
                     .build();
 
             // Convert to Bars (use series.addBar() for compatibility)
@@ -242,11 +242,22 @@ public class BacktestEngine {
                 double volume = kline.getDouble(5);
                 long closeTime = kline.getLong(6);
 
-                ZonedDateTime endTimestamp = ZonedDateTime.ofInstant(
-                        Instant.ofEpochMilli(closeTime), ZoneId.of("UTC"));
-
                 // Add bar directly to series (compatibility with ta4j)
-                series.addBar(endTimestamp, open, high, low, close, volume);
+                Duration duration = Duration.ofMillis(getIntervalMillis(interval));
+                Instant beginTime = Instant.ofEpochMilli(openTime);
+                Instant endTime = beginTime.plus(duration);
+
+                Bar bar = new BaseBar(null,
+                        endTime,
+                        beginTime,
+                        DecimalNum.valueOf(open),
+                        DecimalNum.valueOf(high),
+                        DecimalNum.valueOf(low),
+                        DecimalNum.valueOf(close),
+                        DecimalNum.valueOf(volume),
+                        DecimalNum.valueOf(0), // amount
+                        0L); // trades
+                series.addBar(bar);
             }
 
             // Convert series to list of bars

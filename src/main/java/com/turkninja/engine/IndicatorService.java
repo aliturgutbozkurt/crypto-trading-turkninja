@@ -2,7 +2,7 @@ package com.turkninja.engine;
 
 import org.ta4j.core.BarSeries;
 import org.ta4j.core.BaseBarSeriesBuilder;
-import org.ta4j.core.indicators.EMAIndicator;
+import org.ta4j.core.indicators.averages.EMAIndicator;
 import org.ta4j.core.indicators.MACDIndicator;
 import org.ta4j.core.indicators.RSIIndicator;
 import org.ta4j.core.indicators.bollinger.BollingerBandsLowerIndicator;
@@ -10,9 +10,13 @@ import org.ta4j.core.indicators.bollinger.BollingerBandsMiddleIndicator;
 import org.ta4j.core.indicators.bollinger.BollingerBandsUpperIndicator;
 import org.ta4j.core.indicators.helpers.ClosePriceIndicator;
 import org.ta4j.core.indicators.statistics.StandardDeviationIndicator;
+import org.ta4j.core.num.DoubleNum;
 import org.ta4j.core.num.Num;
+import org.ta4j.core.Bar;
+import org.ta4j.core.BaseBar;
 
 import java.time.Duration;
+import java.time.Instant;
 import java.time.ZonedDateTime;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -230,7 +234,23 @@ public class IndicatorService {
 
     public void addBar(BarSeries series, ZonedDateTime time, double open, double high, double low, double close,
             double volume) {
-        series.addBar(time, open, high, low, close, volume);
+        // Convert ZonedDateTime to Instant for ta4j 0.19 compatibility
+        Instant instant = time.toInstant();
+
+        // Use DoubleNum directly
+        Duration duration = Duration.ofMinutes(15);
+        Bar bar = new BaseBar(duration,
+                instant, // endTime
+                instant.minus(duration), // beginTime
+                DoubleNum.valueOf(open),
+                DoubleNum.valueOf(high),
+                DoubleNum.valueOf(low),
+                DoubleNum.valueOf(close),
+                DoubleNum.valueOf(volume),
+                DoubleNum.valueOf(0), // amount
+                0L); // trades
+
+        series.addBar(bar);
     }
 
     /**

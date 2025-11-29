@@ -5,6 +5,7 @@ import com.turkninja.engine.IndicatorService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.ta4j.core.BarSeries;
+import org.ta4j.core.indicators.averages.EMAIndicator;
 
 import java.util.Map;
 

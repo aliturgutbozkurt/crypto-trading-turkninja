@@ -7,11 +7,15 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.ta4j.core.BarSeries;
 import org.ta4j.core.BaseBarSeriesBuilder;
-import org.ta4j.core.indicators.EMAIndicator;
+import org.ta4j.core.indicators.averages.EMAIndicator;
 import org.ta4j.core.indicators.MACDIndicator;
 import org.ta4j.core.indicators.helpers.ClosePriceIndicator;
+import org.ta4j.core.num.DoubleNum;
+import org.ta4j.core.num.DecimalNum;
 import org.ta4j.core.num.Num;
-
+import org.ta4j.core.BaseBar;
+import org.ta4j.core.Bar;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
@@ -165,10 +169,25 @@ public class MultiTimeframeService {
             double close = kline.getDouble("c");
             double volume = kline.getDouble("v");
 
-            ZonedDateTime startTime = ZonedDateTime.ofInstant(
-                    Instant.ofEpochMilli(openTime), ZoneId.systemDefault());
+            // Add bar directly to series (compatibility with ta4j)
+            // Assuming 1h or 4h timeframe based on config, but we can default to 1h for
+            // duration
+            Duration duration = higherTimeframe.equals("4h") ? Duration.ofHours(4) : Duration.ofHours(1);
 
-            series.addBar(startTime, open, high, low, close, volume);
+            Instant beginTime = Instant.ofEpochMilli(openTime);
+            Instant endTime = beginTime.plus(duration);
+
+            Bar bar = new BaseBar(null,
+                    endTime,
+                    beginTime,
+                    DecimalNum.valueOf(open),
+                    DecimalNum.valueOf(high),
+                    DecimalNum.valueOf(low),
+                    DecimalNum.valueOf(close),
+                    DecimalNum.valueOf(volume),
+                    DecimalNum.valueOf(0), // amount
+                    0L); // trades
+            series.addBar(bar);
         }
 
         return series;

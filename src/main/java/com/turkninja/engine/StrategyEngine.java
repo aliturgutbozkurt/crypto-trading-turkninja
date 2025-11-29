@@ -915,7 +915,7 @@ public class StrategyEngine {
             // Skip if this timestamp already exists in the series (prevents duplicate bar
             // error)
             if (series.getBarCount() > 0 && !series.isEmpty()) {
-                ZonedDateTime lastBarTime = series.getLastBar().getEndTime();
+                ZonedDateTime lastBarTime = series.getLastBar().getEndTime().atZone(ZoneId.of("UTC"));
                 if (!time.isAfter(lastBarTime)) {
                     continue; // Skip duplicate or older bars
                 }
