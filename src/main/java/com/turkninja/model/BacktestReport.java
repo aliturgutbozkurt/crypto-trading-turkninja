@@ -52,6 +52,11 @@ public class BacktestReport {
     public int maxConsecutiveWins = 0;
     public int maxConsecutiveLosses = 0;
 
+    // Ta4j-enhanced metrics
+    public double ta4jMaxDrawdown = 0.0; // Ta4j calculated max drawdown
+    public double averageReturnPerBar = 0.0; // Ta4j average return per bar
+    public int numberOfBars = 0; // Total bars analyzed
+
     // Trade Log
     public List<TradeEntry> trades = new ArrayList<>();
 

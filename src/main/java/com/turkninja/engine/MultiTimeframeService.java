@@ -2,6 +2,7 @@ package com.turkninja.engine;
 
 import com.turkninja.config.Config;
 import com.turkninja.infra.FuturesWebSocketService;
+import com.turkninja.model.TrendAnalysis;
 import org.json.JSONObject;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -38,6 +39,10 @@ public class MultiTimeframeService {
 
     // Cache: symbol -> trend
     private final Map<String, String> trendCache = new ConcurrentHashMap<>();
+
+    // Detailed trend cache
+    private final Map<String, TrendAnalysis> detailedTrendCache = new ConcurrentHashMap<>();
+
     private long lastUpdateTime = 0;
     private static final long CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes cache
 
@@ -82,6 +87,120 @@ public class MultiTimeframeService {
 
         // Calculate and cache
         return analyzeTrend(symbol);
+    }
+
+    /**
+     * Get detailed trend analysis with strength scoring
+     * 
+     * @param symbol Trading symbol
+     * @return TrendAnalysis object with direction and strength (0-100)
+     */
+    public TrendAnalysis getDetailedTrend(String symbol) {
+        if (!enabled) {
+            return new TrendAnalysis("NEUTRAL", 0);
+        }
+
+        // Check cache
+        if (isCacheValid()) {
+            TrendAnalysis cached = detailedTrendCache.get(symbol);
+            if (cached != null) {
+                return cached;
+            }
+        }
+
+        // Calculate detailed trend
+        return analyzeDetailedTrend(symbol);
+    }
+
+    /**
+     * Analyze trend with strength scoring across multiple timeframes
+     */
+    private TrendAnalysis analyzeDetailedTrend(String symbol) {
+        TrendAnalysis analysis = new TrendAnalysis();
+
+        try {
+            int totalStrength = 0;
+
+            // Analyze primary timeframe (1h or 4h)
+            String primaryTrend = analyzeTrend(symbol);
+            analysis.addTimeframeTrend(higherTimeframe, primaryTrend);
+
+            // Fetch klines for detailed analysis
+            List<JSONObject> klines = webSocketService.getCachedKlines(symbol, higherTimeframe, 100);
+
+            if (klines.isEmpty() || klines.size() < Math.max(emaFast, emaSlow) + 5) {
+                logger.warn("Insufficient klines for detailed MTF analysis on {}", symbol);
+                return new TrendAnalysis("NEUTRAL", 0);
+            }
+
+            // Convert to BarSeries
+            BarSeries series = convertToBarSeries(symbol, klines);
+
+            // Calculate indicators
+            ClosePriceIndicator closePrice = new ClosePriceIndicator(series);
+            EMAIndicator emaFastInd = new EMAIndicator(closePrice, emaFast);
+            EMAIndicator emaSlowInd = new EMAIndicator(closePrice, emaSlow);
+            MACDIndicator macd = new MACDIndicator(closePrice, 12, 26);
+            EMAIndicator macdSignal = new EMAIndicator(macd, 9);
+
+            int lastIndex = series.getEndIndex();
+            Num currentPrice = series.getLastBar().getClosePrice();
+            Num emaFastValue = emaFastInd.getValue(lastIndex);
+            Num emaSlowValue = emaSlowInd.getValue(lastIndex);
+            Num macdValue = macd.getValue(lastIndex);
+            Num macdSignalValue = macdSignal.getValue(lastIndex);
+
+            // Calculate strength components
+
+            // 1. Timeframe Alignment (+40 points)
+            if (primaryTrend.equals("BULLISH") || primaryTrend.equals("BEARISH")) {
+                totalStrength += 40;
+                analysis.setAligned(true);
+            }
+
+            // 2. EMA Distance (+30 points)
+            double emaDistance = Math.abs(emaFastValue.doubleValue() - emaSlowValue.doubleValue()) /
+                    currentPrice.doubleValue() * 100;
+            if (emaDistance > 0.5) { // EMAs separated by >0.5%
+                totalStrength += Math.min(30, (int) (emaDistance * 15));
+            }
+
+            // 3. MACD Strength (+20 points)
+            double macdDiff = Math.abs(macdValue.doubleValue() - macdSignalValue.doubleValue());
+            if (macdDiff > 0.001) {
+                totalStrength += Math.min(20, (int) (macdDiff * 1000));
+            }
+
+            // 4. Volume Confirmation (+10 points)
+            double avgVolume = 0;
+            int volumeCount = Math.min(20, series.getBarCount());
+            for (int i = lastIndex - volumeCount + 1; i <= lastIndex - 1; i++) {
+                avgVolume += series.getBar(i).getVolume().doubleValue();
+            }
+            avgVolume /= (volumeCount - 1);
+
+            double currentVolume = series.getLastBar().getVolume().doubleValue();
+            if (currentVolume > avgVolume * 1.2) { // 20% above average
+                totalStrength += 10;
+            }
+
+            // Determine final direction
+            analysis.setDirection(primaryTrend);
+            analysis.setStrength(totalStrength);
+
+            // Cache result
+            detailedTrendCache.put(symbol, analysis);
+            lastUpdateTime = System.currentTimeMillis();
+
+            logger.debug("📊 Detailed MTF {}: {} (strength={})",
+                    symbol, analysis.getDirection(), analysis.getStrength());
+
+            return analysis;
+
+        } catch (Exception e) {
+            logger.error("Error in detailed MTF analysis for {}: {}", symbol, e.getMessage());
+            return new TrendAnalysis("NEUTRAL", 0);
+        }
     }
 
     /**
