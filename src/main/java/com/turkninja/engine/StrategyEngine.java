@@ -255,8 +255,8 @@ public class StrategyEngine {
                 String symbol = kline.getString("s");
                 String interval = kline.getString("i");
 
-                // We only care about 5m candles (as configured in WebSocketService)
-                if (!"5m".equals(interval))
+                // We only care about 15m candles (as configured in WebSocketService)
+                if (!"15m".equals(interval))
                     return;
 
                 // 1. Analyze BTC Trend first if it's BTC
@@ -340,7 +340,7 @@ public class StrategyEngine {
         try {
             String symbol = "BTCUSDT";
             // Get klines from WebSocket cache (NO REST API CALL)
-            List<JSONObject> klines = webSocketService.getCachedKlines(symbol, "5m", 100);
+            List<JSONObject> klines = webSocketService.getCachedKlines(symbol, "15m", 100);
             if (klines.isEmpty()) {
                 logger.warn("No cached klines for {}, skipping analysis", symbol);
                 return;
@@ -379,19 +379,19 @@ public class StrategyEngine {
         }
 
         try {
-            // Fetch Data (5m only)
-            List<JSONObject> klines5m = webSocketService.getCachedKlines(symbol, "5m", 100);
+            // Fetch Data (15m only)
+            List<JSONObject> klines15m = webSocketService.getCachedKlines(symbol, "15m", 100);
 
-            if (klines5m.isEmpty()) {
-                logger.warn("Insufficient cached klines for {} (5m: {}), skipping",
-                        symbol, klines5m.size());
+            if (klines15m.isEmpty()) {
+                logger.warn("Insufficient cached klines for {} (15m: {}), skipping",
+                        symbol, klines15m.size());
                 return;
             }
 
-            BarSeries series5m = convertCachedKlinesToBarSeries(symbol, klines5m);
+            BarSeries series15m = convertCachedKlinesToBarSeries(symbol, klines15m);
 
             // Delegate to core logic
-            analyzeAndTrade(symbol, series5m);
+            analyzeAndTrade(symbol, series15m);
 
         } catch (Exception e) {
             logger.error("Error analyzing symbol: " + symbol, e);
@@ -401,31 +401,39 @@ public class StrategyEngine {
     /**
      * Core strategy logic - accepts BarSeries for backtesting support
      */
-    public void analyzeAndTrade(String symbol, BarSeries series5m) {
+    public void analyzeAndTrade(String symbol, BarSeries series15m) {
+        String coinLogPrefix = "🔎";
+        logger.info("{} analyzeAndTrade called for {}", coinLogPrefix, symbol);
+
+        // Prevent trading on cooldown symbols (anti-reversal)
+        if (hasActivePosition(symbol)) {
+            logger.debug("⏸️ {} already has active position, skipping", symbol);
+            return;
+        }
+
+        Long lastCloseTime = symbolCooldown.get(symbol);
+        if (lastCloseTime != null && System.currentTimeMillis() - lastCloseTime < COOLDOWN_MILLIS) {
+            logger.debug("⏸️ {} in cooldown, skipping analysis", symbol);
+            return;
+        }
+        if (lastCloseTime != null) {
+            symbolCooldown.remove(symbol);
+        }
+
+        // Start latency tracking
+        long analysisStartTime = System.nanoTime();
+
         try {
-            // 1. Check if we already have a position
-            if (hasActivePosition(symbol)) {
-                logger.debug("Skipping {} - already has active position", symbol);
-                return;
-            }
+            // ----- STEP 1: Calculate Indicators -----
+            // Calculate indicators once (used by all filters and strategies)
+            // Uses 15m data, hybrid strategy chooses between Trend-Following vs
+            // Mean-Reversion
+            Map<String, Double> indicators15m = indicatorService.calculateIndicators(series15m);
+            double currentPrice = series15m.getLastBar().getClosePrice().doubleValue();
 
-            // 2. Check cooldown
-            Long lastCloseTime = symbolCooldown.get(symbol);
-            if (lastCloseTime != null) {
-                long timeSinceClose = System.currentTimeMillis() - lastCloseTime;
-                if (timeSinceClose < COOLDOWN_MILLIS) {
-                    return;
-                }
-                symbolCooldown.remove(symbol);
-            }
-
-            // 3. Calculate indicators
-            Map<String, Double> indicators5m = indicatorService.calculateIndicators(series5m);
-            double currentPrice = series5m.getLastBar().getClosePrice().doubleValue();
-
-            // 4. Detect Market Regime
-            MarketRegime regime = regimeDetector.detectRegime(symbol, series5m, indicators5m);
-            double trendStrength = regimeDetector.getTrendStrength(regime, indicators5m.getOrDefault("ADX", 0.0));
+            // ----- STEP 2: Market Regime Detection -----
+            MarketRegime regime = regimeDetector.detectRegime(symbol, series15m, indicators15m);
+            double trendStrength = regimeDetector.getTrendStrength(regime, indicators15m.getOrDefault("ADX", 0.0));
 
             logger.info("{} | Price={} | Regime={} (Strength={:.0f}%)",
                     symbol, currentPrice, regime, trendStrength);
@@ -436,9 +444,9 @@ public class StrategyEngine {
             boolean allowRange = "HYBRID".equals(strategyMode) || "RANGE_ONLY".equals(strategyMode);
 
             if (allowTrend && regime.isTrending()) {
-                analyzeTrendFollowing(symbol, series5m, indicators5m, currentPrice, regime);
+                analyzeTrendFollowing(symbol, series15m, indicators15m, currentPrice, regime);
             } else if (allowRange && regime.isRanging()) {
-                analyzeMeanReversion(symbol, series5m, indicators5m, currentPrice, regime);
+                analyzeMeanReversion(symbol, series15m, indicators15m, currentPrice, regime);
             } else {
                 logger.info("⏸️ {} Skipped - Regime {} not suitable for mode {}", symbol, regime, strategyMode);
             }
@@ -448,22 +456,22 @@ public class StrategyEngine {
         }
     }
 
-    private void analyzeTrendFollowing(String symbol, BarSeries series5m, Map<String, Double> indicators5m,
+    private void analyzeTrendFollowing(String symbol, BarSeries series15m, Map<String, Double> indicators15m,
             double currentPrice, MarketRegime regime) {
-        // 5m Trend Indicators
-        double ema50_5m = indicators5m.getOrDefault("EMA_50", currentPrice);
-        double rsi_5m = indicators5m.getOrDefault("RSI", 50.0);
-        double macd = indicators5m.getOrDefault("MACD", 0.0);
-        double macdSignal = indicators5m.getOrDefault("MACD_SIGNAL", 0.0);
+        // 15m Trend Indicators
+        double ema50_15m = indicators15m.getOrDefault("EMA_50", currentPrice);
+        double rsi_15m = indicators15m.getOrDefault("RSI", 50.0);
+        double macd = indicators15m.getOrDefault("MACD", 0.0);
+        double macdSignal = indicators15m.getOrDefault("MACD_SIGNAL", 0.0);
 
         // 1. Evaluate LONG Criteria
         boolean longPassed = true;
         String longFailReason = null;
 
         for (StrategyCriteria filter : strategyFilters) {
-            if (!filter.evaluate(symbol, series5m, indicators5m, currentPrice, true)) {
+            if (!filter.evaluate(symbol, series15m, indicators15m, currentPrice, true)) {
                 longPassed = false;
-                longFailReason = filter.getFailureReason(symbol, series5m, indicators5m, currentPrice, true);
+                longFailReason = filter.getFailureReason(symbol, series15m, indicators15m, currentPrice, true);
                 logger.info("⏸️ {} LONG filtered by: {} Reason: {}", symbol, filter.getFilterName(), longFailReason);
                 pushSignal(symbol, "BUY", "Blocked: " + longFailReason, currentPrice, false, "BLOCKED");
                 break;
@@ -489,8 +497,8 @@ public class StrategyEngine {
         if (longPassed) {
             String buyReason = String.format("LONG (Trend): All filters passed. Regime=%s", regime);
             if (batchModeEnabled) {
-                SignalScore score = calculateSignalScore(symbol, "BUY", currentPrice, rsi_5m, macd, macdSignal,
-                        ema50_5m, 0);
+                SignalScore score = calculateSignalScore(symbol, "BUY", currentPrice, rsi_15m, macd, macdSignal,
+                        ema50_15m, 0);
                 signalBatch.addSignal(score);
                 return;
             }
@@ -504,9 +512,9 @@ public class StrategyEngine {
         String shortFailReason = null;
 
         for (StrategyCriteria filter : strategyFilters) {
-            if (!filter.evaluate(symbol, series5m, indicators5m, currentPrice, false)) {
+            if (!filter.evaluate(symbol, series15m, indicators15m, currentPrice, false)) {
                 shortPassed = false;
-                shortFailReason = filter.getFailureReason(symbol, series5m, indicators5m, currentPrice, false);
+                shortFailReason = filter.getFailureReason(symbol, series15m, indicators15m, currentPrice, false);
                 logger.info("⏸️ {} SHORT filtered by: {} Reason: {}", symbol, filter.getFilterName(), shortFailReason);
                 pushSignal(symbol, "SELL", "Blocked: " + shortFailReason, currentPrice, false, "BLOCKED");
                 break;
@@ -532,8 +540,8 @@ public class StrategyEngine {
         if (shortPassed) {
             String sellReason = String.format("SHORT (Trend): All filters passed. Regime=%s", regime);
             if (batchModeEnabled) {
-                SignalScore score = calculateSignalScore(symbol, "SELL", currentPrice, rsi_5m, macd, macdSignal,
-                        ema50_5m, 0);
+                SignalScore score = calculateSignalScore(symbol, "SELL", currentPrice, rsi_15m, macd, macdSignal,
+                        ema50_15m, 0);
                 signalBatch.addSignal(score);
                 return;
             }
@@ -542,10 +550,10 @@ public class StrategyEngine {
         }
     }
 
-    private void analyzeMeanReversion(String symbol, BarSeries series5m, Map<String, Double> indicators5m,
+    private void analyzeMeanReversion(String symbol, BarSeries series15m, Map<String, Double> indicators15m,
             double currentPrice, MarketRegime regime) {
         // Mean Reversion Strategy
-        if (meanReversionStrategy.checkLongEntry(symbol, series5m, indicators5m, currentPrice)) {
+        if (meanReversionStrategy.checkLongEntry(symbol, series15m, indicators15m, currentPrice)) {
             String reason = String.format("LONG (MeanRev): BB Lower Touch + RSI Oversold. Regime=%s", regime);
             logger.info("🟢 MEAN REVERSION BUY: {}", reason);
             pushSignal(symbol, "BUY", reason, currentPrice, true, "PENDING");
@@ -553,7 +561,7 @@ public class StrategyEngine {
             return;
         }
 
-        if (meanReversionStrategy.checkShortEntry(symbol, series5m, indicators5m, currentPrice)) {
+        if (meanReversionStrategy.checkShortEntry(symbol, series15m, indicators15m, currentPrice)) {
             String reason = String.format("SHORT (MeanRev): BB Upper Touch + RSI Overbought. Regime=%s", regime);
             logger.info("🔴 MEAN REVERSION SELL: {}", reason);
             pushSignal(symbol, "SELL", reason, currentPrice, true, "PENDING");
@@ -672,8 +680,11 @@ public class StrategyEngine {
 
             logger.info("✅ Order placed for {}: {} {} @ {}", symbol, quantity, price);
 
-            // 7. Track Position (Only if successful)
-            positionTracker.trackPosition(symbol, side, price, quantity);
+            // 7. Calculate Dynamic Stop Loss (if enabled)
+            double stopLossPercent = calculateDynamicStopLoss(symbol, price);
+
+            // 8. Track Position (Only if successful) with dynamic SL
+            positionTracker.trackPosition(symbol, side, price, quantity, stopLossPercent);
 
             // 8. Record trade to InfluxDB
             if (influxDBService != null && influxDBService.isEnabled()) {
@@ -833,30 +844,30 @@ public class StrategyEngine {
 
     public void analyze(String symbol) {
         try {
-            // 1. Get Klines (5m)
-            List<JSONObject> klines5m = webSocketService.getCachedKlines(symbol, "5m", 200);
-            if (klines5m.size() < 50) {
-                logger.warn("Not enough 5m data for {}: {}", symbol, klines5m.size());
+            // 1. Get Klines (15m)
+            List<JSONObject> klines15m = webSocketService.getCachedKlines(symbol, "15m", 200);
+            if (klines15m.size() < 50) {
+                logger.warn("Not enough 15m data for {}: {}", symbol, klines15m.size());
                 return;
             }
 
             // 2. Convert to BarSeries
-            BarSeries series5m = convertCachedKlinesToBarSeries(symbol, klines5m);
+            BarSeries series15m = convertCachedKlinesToBarSeries(symbol, klines15m);
 
             // 3. Calculate Indicators
-            Map<String, Double> indicators5m = indicatorService.calculateIndicators(series5m);
+            Map<String, Double> indicators15m = indicatorService.calculateIndicators(series15m);
 
             // 4. Extract Key Values
-            double currentPrice = series5m.getLastBar().getClosePrice().doubleValue();
-            double rsi_5m = indicators5m.getOrDefault("RSI", 50.0);
-            double macd = indicators5m.getOrDefault("MACD", 0.0);
-            double macdSignal = indicators5m.getOrDefault("MACD_SIGNAL", 0.0);
-            double ema50_5m = indicators5m.getOrDefault("EMA_50", currentPrice);
+            double currentPrice = series15m.getLastBar().getClosePrice().doubleValue();
+            double rsi_15m = indicators15m.getOrDefault("RSI", 50.0);
+            double macd = indicators15m.getOrDefault("MACD", 0.0);
+            double macdSignal = indicators15m.getOrDefault("MACD_SIGNAL", 0.0);
+            double ema50_15m = indicators15m.getOrDefault("EMA_50", currentPrice);
 
-            logger.debug("{} Analysis: Price={}, RSI={}, MACD={}, BB_Low={}", symbol, currentPrice, rsi_5m, macd,
-                    indicators5m.getOrDefault("BB_LOWER", 0.0));
+            logger.debug("{} Analysis: Price={}, RSI={}, MACD={}, BB_Low={}", symbol, currentPrice, rsi_15m, macd,
+                    indicators15m.getOrDefault("BB_LOWER", 0.0));
 
-            if (rsi_5m < 30 && currentPrice < indicators5m.getOrDefault("BB_LOWER", 0.0)) {
+            if (rsi_15m < 30 && currentPrice < indicators15m.getOrDefault("BB_LOWER", 0.0)) {
                 logger.info("BUY SIGNAL for {} (Oversold + Below BB)", symbol);
             }
 
@@ -1026,6 +1037,80 @@ public class StrategyEngine {
         }
 
         signalBatch.clear();
+    }
+
+    /**
+     * Calculate dynamic stop loss based on ATR volatility
+     * 
+     * @param symbol       Symbol to calculate for
+     * @param currentPrice Current market price
+     * @return Stop loss percentage (e.g., 0.02 for 2%)
+     */
+    private double calculateDynamicStopLoss(String symbol, double currentPrice) {
+        // Check if dynamic SL is enabled
+        boolean dynamicSLEnabled = Boolean.parseBoolean(Config.get("risk.dynamic.sl.enabled", "false"));
+
+        if (!dynamicSLEnabled) {
+            // Use default static SL
+            double baseSL = Config.getDouble("risk.dynamic.sl.base.percent", 0.02);
+            logger.debug("{} Dynamic SL disabled, using base: {}%", symbol, baseSL * 100);
+            return baseSL;
+        }
+
+        try {
+            // Get 15m klines for ATR calculation
+            List<JSONObject> klines15m = webSocketService.getCachedKlines(symbol, "15m", 50);
+
+            if (klines15m.size() < 14) {
+                logger.warn("{} Insufficient data for ATR, using base SL", symbol);
+                return Config.getDouble("risk.dynamic.sl.base.percent", 0.02);
+            }
+
+            // Convert to BarSeries for ATR calculation
+            BarSeries series = convertCachedKlinesToBarSeries(symbol, klines15m);
+
+            // Calculate ATR (14 periods)
+            org.ta4j.core.indicators.ATRIndicator atr = new org.ta4j.core.indicators.ATRIndicator(series, 14);
+            double atrValue = atr.getValue(series.getEndIndex()).doubleValue();
+            double atrPercent = (atrValue / currentPrice) * 100; // ATR as % of price
+
+            // Load configuration
+            double baseSL = Config.getDouble("risk.dynamic.sl.base.percent", 0.02);
+            double highVolThreshold = Config.getDouble("risk.dynamic.sl.high.volatility.threshold", 3.0);
+            double highVolMultiplier = Config.getDouble("risk.dynamic.sl.high.volatility.multiplier", 1.5);
+            double lowVolThreshold = Config.getDouble("risk.dynamic.sl.low.volatility.threshold", 1.0);
+            double lowVolMultiplier = Config.getDouble("risk.dynamic.sl.low.volatility.multiplier", 0.75);
+            double minSL = Config.getDouble("risk.dynamic.sl.min.percent", 0.01);
+            double maxSL = Config.getDouble("risk.dynamic.sl.max.percent", 0.05);
+
+            // Calculate dynamic SL based on volatility
+            double dynamicSL;
+            if (atrPercent > highVolThreshold) {
+                // High volatility - wider stop
+                dynamicSL = baseSL * highVolMultiplier;
+                logger.info("🔥 {} HIGH volatility detected (ATR: {}%) → SL: {}%",
+                        symbol, String.format("%.2f", atrPercent), String.format("%.2f", dynamicSL * 100));
+            } else if (atrPercent < lowVolThreshold) {
+                // Low volatility - tighter stop
+                dynamicSL = baseSL * lowVolMultiplier;
+                logger.info("😴 {} LOW volatility detected (ATR: {}%) → SL: {}%",
+                        symbol, String.format("%.2f", atrPercent), String.format("%.2f", dynamicSL * 100));
+            } else {
+                // Normal volatility - base stop
+                dynamicSL = baseSL;
+                logger.info("📊 {} NORMAL volatility (ATR: {}%) → SL: {}%",
+                        symbol, String.format("%.2f", atrPercent), String.format("%.2f", dynamicSL * 100));
+            }
+
+            // Clamp to min/max
+            dynamicSL = Math.max(minSL, Math.min(maxSL, dynamicSL));
+
+            return dynamicSL;
+
+        } catch (Exception e) {
+            logger.error("{} Error calculating dynamic SL: {}", symbol, e.getMessage());
+            return Config.getDouble("risk.dynamic.sl.base.percent", 0.02);
+        }
     }
 
     public void setAsyncExecution(boolean enabled) {

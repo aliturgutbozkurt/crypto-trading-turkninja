@@ -79,6 +79,9 @@ public class RiskManager {
     private final double correlationThreshold;
     private final int minPositionsForCorrelation;
 
+    // Total Exposure Limiter
+    private final double maxTotalExposurePercent;
+
     public RiskManager(PositionTracker positionTracker, FuturesBinanceService futuresService,
             OrderBookService orderBookService, CorrelationService correlationService,
             InfluxDBService influxDBService, TelegramNotifier telegramNotifier) {
@@ -108,6 +111,9 @@ public class RiskManager {
         this.correlationFilterEnabled = Boolean.parseBoolean(Config.get("risk.correlation.filter.enabled", "false"));
         this.correlationThreshold = Config.getDouble("risk.correlation.threshold", 0.7);
         this.minPositionsForCorrelation = Config.getInt("risk.correlation.min_positions", 3);
+
+        // Load total exposure settings
+        this.maxTotalExposurePercent = Config.getDouble("risk.max.total.exposure.percent", 0.60);
 
         logger.info(
                 "RiskManager initialized with SL/TP automation (Max Position: ${}, Max Concurrent: {}, Daily Loss Limit: ${}, OrderBook Aware: {})",
@@ -731,7 +737,28 @@ public class RiskManager {
             return false;
         }
 
-        // 3. Check daily loss limit
+        // 3. Check total exposure limit
+        double totalExposure = calculateTotalExposure();
+        double accountBalance = getAccountBalance();
+        double maxTotalExposure = accountBalance * maxTotalExposurePercent;
+
+        if (totalExposure + positionSizeUsdt > maxTotalExposure) {
+            logger.warn("⛔ Cannot open position: Total exposure limit reached! " +
+                    "Current: $" + String.format("%.2f", totalExposure) +
+                    ", New: $" + String.format("%.2f", positionSizeUsdt) +
+                    ", Max: $" + String.format("%.2f", maxTotalExposure) +
+                    " (" + String.format("%.1f", maxTotalExposurePercent * 100) + "% of $" +
+                    String.format("%.2f", accountBalance) + ")");
+            return false;
+        }
+
+        logger.info("✅ Total exposure check passed: $" + String.format("%.2f", totalExposure) +
+                " + $" + String.format("%.2f", positionSizeUsdt) +
+                " = $" + String.format("%.2f", totalExposure + positionSizeUsdt) +
+                " / $" + String.format("%.2f", maxTotalExposure) +
+                " (" + String.format("%.1f", ((totalExposure + positionSizeUsdt) / maxTotalExposure) * 100) + "%)");
+
+        // 4. Check daily loss limit
         if (dailyLoss >= dailyLossLimit) {
             logger.warn("Daily loss limit reached: ${} / ${}", dailyLoss, dailyLossLimit);
             return false;
@@ -829,6 +856,31 @@ public class RiskManager {
             // Reset on win
             consecutiveLosses = 0;
             logger.info("✅ Trade closed with profit: ${} (Consecutive losses reset)", pnl);
+        }
+    }
+
+    /**
+     * Calculate total exposure across all open positions
+     * 
+     * @return Total notional value of all positions in USDT
+     */
+    private double calculateTotalExposure() {
+        return positionTracker.getAllPositions().values().stream()
+                .mapToDouble(p -> Math.abs(p.quantity * p.entryPrice))
+                .sum();
+    }
+
+    /**
+     * Get current account balance from Binance
+     * 
+     * @return Account balance in USDT
+     */
+    private double getAccountBalance() {
+        try {
+            return futuresService.getAvailableBalance();
+        } catch (Exception e) {
+            logger.error("Failed to get account balance: {}", e.getMessage());
+            return 0.0; // Fallback - will prevent new positions
         }
     }
 

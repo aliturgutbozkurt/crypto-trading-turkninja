@@ -106,8 +106,8 @@ public class AppStartupRunner implements CommandLineRunner {
                         "DOTUSDT", "AVAXUSDT", "LINKUSDT", "BNBUSDT",
                         "ADAUSDT", "NEARUSDT", "SANDUSDT", "MANAUSDT", "ARBUSDT");
                 for (String sym : symbols) {
-                    // Fetch 5m klines and populate cache
-                    loadKlinesToCache(sym, "5m");
+                    // Fetch 15m klines and populate cache
+                    loadKlinesToCache(sym, "15m");
                 }
             } catch (Exception e) {
                 logger.warn("REST fallback failed to populate caches: {}", e.getMessage());

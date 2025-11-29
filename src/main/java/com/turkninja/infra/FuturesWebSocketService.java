@@ -164,14 +164,14 @@ public class FuturesWebSocketService {
      */
     public void startKlineStream(List<String> symbols) {
         try {
-            // Build combined stream URL for 5-minute klines only
+            // Build combined stream URL for 15-minute klines only
             StringBuilder streamBuilder = new StringBuilder(WS_BASE_URL + "/stream?streams=");
             for (int i = 0; i < symbols.size(); i++) {
                 if (i > 0) {
                     streamBuilder.append("/");
                 }
                 String symbol = symbols.get(i).toLowerCase();
-                streamBuilder.append(symbol).append("@kline_5m");
+                streamBuilder.append(symbol).append("@kline_15m");
             }
 
             String wsUrl = streamBuilder.toString();
@@ -180,7 +180,7 @@ public class FuturesWebSocketService {
             klineWebSocket = httpClient.newWebSocket(request, new WebSocketListener() {
                 @Override
                 public void onOpen(WebSocket webSocket, Response response) {
-                    logger.info("Kline stream connected for {} symbols (5m)", symbols.size());
+                    logger.info("Kline stream connected for {} symbols (15m)", symbols.size());
                 }
 
                 @Override

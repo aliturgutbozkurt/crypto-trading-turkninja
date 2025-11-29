@@ -43,19 +43,30 @@ public class PositionTracker {
     }
 
     /**
-     * Track a new position with percentage-based TP/SL
+     * Track a new position with default TP/SL (backward compatibility)
      */
     public void trackPosition(String symbol, String side, double entryPrice, double quantity) {
-        Position position = new Position(symbol, side, entryPrice, quantity);
+        trackPosition(symbol, side, entryPrice, quantity, this.stopLossPercent);
+    }
+
+    /**
+     * Track a new position with custom stop loss percentage
+     * 
+     * @param stopLossPercentOverride Custom SL percentage (e.g., 0.02 for 2%)
+     */
+    public void trackPosition(String symbol, String side, double entryPrice, double quantity,
+            double stopLossPercentOverride) {
+        Position position = new Position(symbol, side, entryPrice, quantity, stopLossPercentOverride);
         activePositions.put(symbol, position);
 
         // Register with RiskManager for Trailing Stop
         riskManager.registerPosition(symbol, BigDecimal.valueOf(entryPrice), BigDecimal.valueOf(trailingStopPercent));
 
-        logger.info("Tracking position: {} {} @ {} x{} (TP: +{}%, SL: -{}%)",
+        logger.info("Tracking position: {} {} @ {} x{} (TP: +{}%, SL: -{}%, Dynamic: {})",
                 side, symbol, entryPrice, quantity,
                 String.format("%.2f", takeProfitPercent * 100),
-                String.format("%.2f", stopLossPercent * 100));
+                String.format("%.2f", stopLossPercentOverride * 100),
+                stopLossPercentOverride != this.stopLossPercent ? "YES" : "NO");
     }
 
     /**
@@ -79,10 +90,10 @@ public class PositionTracker {
         double grossPnlPercent = priceDiff / entryPrice;
         double netPnlPercent = grossPnlPercent - COMMISSION_RATE;
 
-        // Check Stop Loss
-        if (netPnlPercent <= -stopLossPercent) {
+        // Check Stop Loss (using position-specific SL)
+        if (netPnlPercent <= -position.stopLossPercent) {
             logger.warn("⛔ Stop-loss triggered for {}: Net P&L={:.2f}% (Threshold: -{:.2f}%)",
-                    symbol, netPnlPercent * 100, stopLossPercent * 100);
+                    symbol, netPnlPercent * 100, position.stopLossPercent * 100);
             return PositionAction.CLOSE_STOP_LOSS;
         }
 
@@ -250,13 +261,19 @@ public class PositionTracker {
         public final String side;
         public final double entryPrice;
         public double quantity; // NOT final - can be updated for partial closes
+        public final double stopLossPercent; // Custom SL for this position
         public final String entryTime;
 
         public Position(String symbol, String side, double entryPrice, double quantity) {
+            this(symbol, side, entryPrice, quantity, 0.02); // Default 2% SL
+        }
+
+        public Position(String symbol, String side, double entryPrice, double quantity, double stopLossPercent) {
             this.symbol = symbol;
             this.side = side;
             this.entryPrice = entryPrice;
             this.quantity = quantity;
+            this.stopLossPercent = stopLossPercent;
             this.entryTime = Instant.now().toString();
         }
     }
