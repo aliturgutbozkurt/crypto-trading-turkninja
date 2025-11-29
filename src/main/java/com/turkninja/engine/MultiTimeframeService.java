@@ -330,38 +330,54 @@ public class MultiTimeframeService {
 
     /**
      * Check if MTF filter allows a LONG trade
-     *
+     * Enhanced: Only block strong counter-trends (strength > 60)
+     * 
      * @param symbol Trading symbol
      * @return true if allowed, false if blocked
      */
     public boolean allowLong(String symbol) {
-        String trend = getTrend(symbol);
-        // Allow LONG only if trend is BULLISH or NEUTRAL
-        boolean allowed = !trend.equals("BEARISH");
-
-        if (!allowed) {
-            logger.info("⏸️ {} LONG filtered by MTF - {} trend is {}", symbol, higherTimeframe, trend);
+        if (!enabled) {
+            return true;
         }
 
-        return allowed;
+        // Get detailed trend analysis
+        TrendAnalysis analysis = getDetailedTrend(symbol);
+
+        // Only block STRONG bearish trends
+        if (analysis.getDirection().equals("BEARISH") && analysis.getStrength() > 60) {
+            logger.info("⏸️ {} LONG filtered by MTF - {} trend is BEARISH with strength {}",
+                    symbol, higherTimeframe, analysis.getStrength());
+            return false;
+        }
+
+        // Allow NEUTRAL or weak BEARISH trends
+        return true;
     }
 
     /**
      * Check if MTF filter allows a SHORT trade
-     *
+     * Enhanced: Only block strong counter-trends (strength > 60)
+     * 
      * @param symbol Trading symbol
      * @return true if allowed, false if blocked
      */
     public boolean allowShort(String symbol) {
-        String trend = getTrend(symbol);
-        // Allow SHORT only if trend is BEARISH or NEUTRAL
-        boolean allowed = !trend.equals("BULLISH");
-
-        if (!allowed) {
-            logger.info("⏸️ {} SHORT filtered by MTF - {} trend is {}", symbol, higherTimeframe, trend);
+        if (!enabled) {
+            return true;
         }
 
-        return allowed;
+        // Get detailed trend analysis
+        TrendAnalysis analysis = getDetailedTrend(symbol);
+
+        // Only block STRONG bullish trends
+        if (analysis.getDirection().equals("BULLISH") && analysis.getStrength() > 60) {
+            logger.info("⏸️ {} SHORT filtered by MTF - {} trend is BULLISH with strength {}",
+                    symbol, higherTimeframe, analysis.getStrength());
+            return false;
+        }
+
+        // Allow NEUTRAL or weak BULLISH trends
+        return true;
     }
 
     /**

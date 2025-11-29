@@ -154,6 +154,151 @@ public class AdaptiveParameterService {
     }
 
     /**
+     * Get dynamic Stop Loss and Take Profit based on ATR (Phase 2)
+     * Uses 2:1 risk-reward ratio
+     * 
+     * @param symbol     Trading symbol
+     * @param barSeries  Price data
+     * @param entryPrice Entry price
+     * @param isLong     true for LONG, false for SHORT
+     * @return StopAndTarget with SL and TP prices
+     */
+    public StopAndTarget getDynamicStopAndTarget(String symbol, BarSeries barSeries,
+            double entryPrice, boolean isLong) {
+        try {
+            // Calculate ATR
+            double atr = indicatorService.getATR(barSeries, atrPeriod);
+
+            // Stop Loss = 1.5x ATR (reasonable buffer)
+            double stopDistance = atr * 1.5;
+
+            // Take Profit = 3x ATR (2:1 risk-reward ratio)
+            double targetDistance = atr * 3.0;
+
+            double stopLoss, takeProfit;
+
+            if (isLong) {
+                stopLoss = entryPrice - stopDistance;
+                takeProfit = entryPrice + targetDistance;
+            } else {
+                stopLoss = entryPrice + stopDistance;
+                takeProfit = entryPrice - targetDistance;
+            }
+
+            // Calculate percentages for logging
+            double stopPercent = (stopDistance / entryPrice) * 100;
+            double targetPercent = (targetDistance / entryPrice) * 100;
+
+            logger.debug("📊 Dynamic TP/SL {} (ATR={:.4f}): SL={:.2f} (-{:.2f}%), TP={:.2f} (+{:.2f}%), R:R=2:1",
+                    symbol, atr, stopLoss, stopPercent, takeProfit, targetPercent);
+
+            return new StopAndTarget(stopLoss, takeProfit, atr, stopPercent, targetPercent);
+
+        } catch (Exception e) {
+            logger.error("Error calculating dynamic TP/SL for {}: {}", symbol, e.getMessage());
+
+            // Fallback to fixed percentages
+            double fallbackSL = isLong ? entryPrice * 0.98 : entryPrice * 1.02; // 2%
+            double fallbackTP = isLong ? entryPrice * 1.04 : entryPrice * 0.96; // 4%
+
+            return new StopAndTarget(fallbackSL, fallbackTP, 0.0, 2.0, 4.0);
+        }
+    }
+
+    /**
+     * Get position size multiplier based on MTF trend strength (Phase 3)
+     * Strong trend = larger position, weak trend = smaller position
+     * 
+     * @param trendStrength MTF trend strength (0-100)
+     * @return Multiplier (0.7-1.3)
+     */
+    public double getPositionSizeMultiplier(int trendStrength) {
+        // Strong trend (>80): +30% position size
+        if (trendStrength > 80) {
+            return 1.3;
+        }
+        // Good trend (60-80): +20% position size
+        else if (trendStrength > 60) {
+            return 1.2;
+        }
+        // Medium trend (40-60): Normal position size
+        else if (trendStrength > 40) {
+            return 1.0;
+        }
+        // Weak trend (<40): -30% position size (reduce risk)
+        else {
+            return 0.7;
+        }
+    }
+
+    /**
+     * Get dynamic TP/SL with trend strength adjustment (Phase 3)
+     * Strong trend = wider TP for better profit capture
+     * 
+     * @param symbol        Trading symbol
+     * @param barSeries     Price data
+     * @param entryPrice    Entry price
+     * @param isLong        true for LONG, false for SHORT
+     * @param trendStrength MTF trend strength (0-100)
+     * @return StopAndTarget with adjusted TP
+     */
+    public StopAndTarget getDynamicStopAndTargetWithTrend(String symbol, BarSeries barSeries,
+            double entryPrice, boolean isLong,
+            int trendStrength) {
+        try {
+            // Calculate base ATR levels
+            double atr = indicatorService.getATR(barSeries, atrPeriod);
+
+            // Stop Loss = 1.5x ATR (unchanged)
+            double stopDistance = atr * 1.5;
+
+            // Take Profit = 3x ATR base, adjusted by trend strength
+            double baseTpMultiplier = 3.0;
+            double tpMultiplier = baseTpMultiplier;
+
+            // Strong trend: expand TP for better profit
+            if (trendStrength > 80) {
+                tpMultiplier = baseTpMultiplier * 1.5; // 4.5x ATR (+50%)
+            } else if (trendStrength > 60) {
+                tpMultiplier = baseTpMultiplier * 1.3; // 3.9x ATR (+30%)
+            } else if (trendStrength < 40) {
+                // Weak trend: tighter TP (quick exit)
+                tpMultiplier = baseTpMultiplier * 0.8; // 2.4x ATR (-20%)
+            }
+
+            double targetDistance = atr * tpMultiplier;
+
+            double stopLoss, takeProfit;
+
+            if (isLong) {
+                stopLoss = entryPrice - stopDistance;
+                takeProfit = entryPrice + targetDistance;
+            } else {
+                stopLoss = entryPrice + stopDistance;
+                takeProfit = entryPrice - targetDistance;
+            }
+
+            // Calculate percentages for logging
+            double stopPercent = (stopDistance / entryPrice) * 100;
+            double targetPercent = (targetDistance / entryPrice) * 100;
+
+            logger.debug("📊 Dynamic TP/SL {} (ATR={:.4f}, strength={}): SL={:.2f} (-{:.2f}%), TP={:.2f} (+{:.2f}%)",
+                    symbol, atr, trendStrength, stopLoss, stopPercent, takeProfit, targetPercent);
+
+            return new StopAndTarget(stopLoss, takeProfit, atr, stopPercent, targetPercent);
+
+        } catch (Exception e) {
+            logger.error("Error calculating trend-adjusted TP/SL for {}: {}", symbol, e.getMessage());
+
+            // Fallback
+            double fallbackSL = isLong ? entryPrice * 0.98 : entryPrice * 1.02;
+            double fallbackTP = isLong ? entryPrice * 1.04 : entryPrice * 0.96;
+
+            return new StopAndTarget(fallbackSL, fallbackTP, 0.0, 2.0, 4.0);
+        }
+    }
+
+    /**
      * Clear parameters cache (force recalculation)
      */
     public void clearCache() {
@@ -182,6 +327,26 @@ public class AdaptiveParameterService {
             this.rsiShortMax = rsiShortMax;
             this.volatilityRegime = volatilityRegime;
             this.atrPercent = atrPercent;
+        }
+    }
+
+    /**
+     * Stop Loss and Take Profit container (Phase 2)
+     */
+    public static class StopAndTarget {
+        public final double stopLoss;
+        public final double takeProfit;
+        public final double atr;
+        public final double stopPercent;
+        public final double targetPercent;
+
+        public StopAndTarget(double stopLoss, double takeProfit, double atr,
+                double stopPercent, double targetPercent) {
+            this.stopLoss = stopLoss;
+            this.takeProfit = takeProfit;
+            this.atr = atr;
+            this.stopPercent = stopPercent;
+            this.targetPercent = targetPercent;
         }
     }
 
