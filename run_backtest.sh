@@ -16,7 +16,7 @@ echo "✅ Compiled successfully" && \
 mvn -q exec:java \
   -Dexec.mainClass="com.turkninja.QuickBacktestRunner" \
   -Dexec.cleanupDaemonThreads=false \
-  -Dexec.classpathScope=runtime
+  -Dexec.classpathScope=runtime | tee backtest_output.log
 
 echo ""
 echo "✅ Backtest complete! Results saved to backtest_results.txt"

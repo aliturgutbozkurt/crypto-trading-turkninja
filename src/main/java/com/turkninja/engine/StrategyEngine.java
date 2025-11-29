@@ -443,7 +443,8 @@ public class StrategyEngine {
             boolean allowTrend = "HYBRID".equals(strategyMode) || "TREND_ONLY".equals(strategyMode);
             boolean allowRange = "HYBRID".equals(strategyMode) || "RANGE_ONLY".equals(strategyMode);
 
-            if (allowTrend && regime.isTrending()) {
+            if (allowTrend && (regime.isTrending() || regime == MarketRegime.WEAK_UPTREND
+                    || regime == MarketRegime.WEAK_DOWNTREND)) {
                 analyzeTrendFollowing(symbol, series15m, indicators15m, currentPrice, regime);
             } else if (allowRange && regime.isRanging()) {
                 analyzeMeanReversion(symbol, series15m, indicators15m, currentPrice, regime);
