@@ -9,12 +9,13 @@ public class PositionDTO {
     private double roi;
     private double positionSizeUsdt;
     private double balancePercent;
+    private long entryTime; // UNIX timestamp in milliseconds
 
     public PositionDTO() {
     }
 
     public PositionDTO(String symbol, String side, double entryPrice, double currentPrice,
-            double unrealizedPnL, double roi, double positionSizeUsdt, double balancePercent) {
+            double unrealizedPnL, double roi, double positionSizeUsdt, double balancePercent, long entryTime) {
         this.symbol = symbol;
         this.side = side;
         this.entryPrice = entryPrice;
@@ -23,6 +24,14 @@ public class PositionDTO {
         this.roi = roi;
         this.positionSizeUsdt = positionSizeUsdt;
         this.balancePercent = balancePercent;
+        this.entryTime = entryTime;
+    }
+
+    // Backward compatibility constructor
+    public PositionDTO(String symbol, String side, double entryPrice, double currentPrice,
+            double unrealizedPnL, double roi, double positionSizeUsdt, double balancePercent) {
+        this(symbol, side, entryPrice, currentPrice, unrealizedPnL, roi, positionSizeUsdt, balancePercent,
+                System.currentTimeMillis());
     }
 
     // Getters and Setters
@@ -88,5 +97,13 @@ public class PositionDTO {
 
     public void setBalancePercent(double balancePercent) {
         this.balancePercent = balancePercent;
+    }
+
+    public long getEntryTime() {
+        return entryTime;
+    }
+
+    public void setEntryTime(long entryTime) {
+        this.entryTime = entryTime;
     }
 }

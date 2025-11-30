@@ -700,7 +700,7 @@ public class StrategyEngine {
                 return; // STOP HERE - Do not track position or send Telegram
             }
 
-            logger.info("✅ Order placed for {}: {} {} @ {}", symbol, quantity, price);
+            logger.info("✅ Order placed for {}: {} {} @ {}", symbol, quantity, side, price);
 
             // 7. Calculate Dynamic Stop Loss (if enabled)
             double stopLossPercent = calculateDynamicStopLoss(symbol, price);
@@ -708,9 +708,11 @@ public class StrategyEngine {
             // 8. Track Position (Only if successful) with dynamic SL
             positionTracker.trackPosition(symbol, side, price, quantity, stopLossPercent);
 
-            // 8. Record trade to InfluxDB
+            // 8. Record trade and position open to InfluxDB
+            Instant now = java.time.Instant.now();
             if (influxDBService != null && influxDBService.isEnabled()) {
-                influxDBService.writeTrade(symbol, side, price, quantity, positionSize, java.time.Instant.now());
+                influxDBService.writeTrade(symbol, side, price, quantity, positionSize, now);
+                influxDBService.writePositionOpen(symbol, side, price, now); // Track entry time
             }
 
             // 9. Send Telegram Notification (Only if successful)

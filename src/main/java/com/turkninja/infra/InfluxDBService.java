@@ -135,6 +135,63 @@ public class InfluxDBService {
     }
 
     /**
+     * Write position open event (for entry time tracking)
+     */
+    public void writePositionOpen(String symbol, String side, double entryPrice, Instant timestamp) {
+        if (!enabled)
+            return;
+
+        try {
+            Point point = Point.measurement("position_opens")
+                    .addTag("symbol", symbol)
+                    .addTag("side", side)
+                    .addField("entry_price", entryPrice)
+                    .addField("entry_time_ms", timestamp.toEpochMilli())
+                    .time(timestamp, WritePrecision.MS);
+
+            writeApi.writePoint(point);
+            logger.debug("📝 Position open written: {} {} @ ${}", symbol, side, entryPrice);
+        } catch (Exception e) {
+            logger.error("Failed to write position open for {}: {}", symbol, e.getMessage());
+        }
+    }
+
+    /**
+     * Get entry time for an open position from InfluxDB
+     * Returns null if not found
+     */
+    public Long getPositionEntryTime(String symbol) {
+        if (!enabled)
+            return null;
+
+        try {
+            // Query the most recent position_opens entry for this symbol
+            String flux = String.format(
+                    "from(bucket: \"%s\") " +
+                            "|> range(start: -30d) " +
+                            "|> filter(fn: (r) => r._measurement == \"position_opens\") " +
+                            "|> filter(fn: (r) => r.symbol == \"%s\") " +
+                            "|> filter(fn: (r) => r._field == \"entry_time_ms\") " +
+                            "|> last()",
+                    bucket, symbol);
+
+            List<FluxTable> tables = queryApi.query(flux, org);
+
+            if (!tables.isEmpty() && !tables.get(0).getRecords().isEmpty()) {
+                Object value = tables.get(0).getRecords().get(0).getValue();
+                if (value instanceof Number) {
+                    return ((Number) value).longValue();
+                }
+            }
+
+            return null;
+        } catch (Exception e) {
+            logger.error("Failed to query entry time for {}: {}", symbol, e.getMessage());
+            return null;
+        }
+    }
+
+    /**
      * Write position close event
      */
     public void writePositionClose(String symbol, String side, double entryPrice, double exitPrice,

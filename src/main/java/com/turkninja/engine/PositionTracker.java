@@ -97,7 +97,7 @@ public class PositionTracker {
             return PositionAction.CLOSE_STOP_LOSS;
         }
 
-        // FIXED TAKE PROFIT DISABLED - Using Trailing Stop instead
+        // FIXED TAKE PROFIT DISABLED - Using Trailing Stop instead (User preference)
         // Trailing Stop will protect profits dynamically
         /*
          * if (netPnlPercent >= takeProfitPercent) {

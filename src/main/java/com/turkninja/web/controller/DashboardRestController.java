@@ -94,8 +94,54 @@ public class DashboardRestController {
                         double balancePercent = balance > 0 ? (initialMargin / balance) * 100 : 0; // Balance % is based
                                                                                                    // on Margin used
 
+                        // Get entry time (priority: InfluxDB > PositionTracker > Binance updateTime >
+                        // current time)
+                        long entryTimeMs = System.currentTimeMillis(); // Default fallback
+                        long currentTimeMs = System.currentTimeMillis();
+
+                        // 1. Try InfluxDB first (survives restarts)
+                        if (influxDBService != null && influxDBService.isEnabled()) {
+                            Long influxEntryTime = influxDBService.getPositionEntryTime(symbol);
+                            if (influxEntryTime != null && influxEntryTime > 0 && influxEntryTime < currentTimeMs) {
+                                entryTimeMs = influxEntryTime;
+                            }
+                        }
+
+                        // 2. Try PositionTracker if InfluxDB didn't have it
+                        if (entryTimeMs == currentTimeMs) {
+                            PositionTracker.Position trackedPosition = positionTracker.getPosition(symbol);
+                            if (trackedPosition != null && trackedPosition.entryTime != null) {
+                                try {
+                                    long trackedTime = java.time.Instant.parse(trackedPosition.entryTime)
+                                            .toEpochMilli();
+                                    if (trackedTime > 0 && trackedTime < currentTimeMs) {
+                                        entryTimeMs = trackedTime;
+                                    }
+                                } catch (Exception e) {
+                                    // Keep trying other sources
+                                }
+                            }
+                        }
+
+                        // 3. Try Binance updateTime as last resort
+                        if (entryTimeMs == currentTimeMs) {
+                            long binanceUpdateTime = pos.optLong("updateTime", 0);
+                            if (binanceUpdateTime > 0 && binanceUpdateTime < currentTimeMs) {
+                                entryTimeMs = binanceUpdateTime;
+                            }
+                        }
+
+                        // Final validation: if entry time is still suspicious (future or >24h ago for
+                        // new position)
+                        // For positions without tracked entry time, assume they were opened recently
+                        if (entryTimeMs >= currentTimeMs || entryTimeMs < (currentTimeMs - 86400000)) {
+                            // If no valid entry time found, use current time (will show "0h 0m 0s" until
+                            // properly tracked)
+                            entryTimeMs = currentTimeMs;
+                        }
+
                         positions.add(new PositionDTO(symbol, side, entryPrice, markPrice,
-                                unrealizedProfit, roiPercent, notional, balancePercent));
+                                unrealizedProfit, roiPercent, notional, balancePercent, entryTimeMs));
                     }
                 }
             }

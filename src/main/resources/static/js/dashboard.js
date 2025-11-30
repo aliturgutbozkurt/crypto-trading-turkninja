@@ -107,11 +107,21 @@ function updateDashboard(data) {
         const positions = data.positions;
 
         if (!positions || positions.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="9" class="no-data">No active positions. Strategy is scanning...</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="10" class="no-data">No active positions. Strategy is scanning...</td></tr>';
         } else {
             // Simple full redraw for now (can be optimized later if needed)
             let html = '';
+            const now = Date.now();
             positions.forEach(pos => {
+                // Calculate duration
+                const entryTime = pos.entryTime || now;
+                const durationMs = now - entryTime;
+                const durationSec = Math.floor(durationMs / 1000);
+                const hours = Math.floor(durationSec / 3600);
+                const minutes = Math.floor((durationSec % 3600) / 60);
+                const seconds = durationSec % 60;
+                const durationStr = `${hours}h ${minutes}m ${seconds}s`;
+
                 html += `
                 <tr>
                     <td class="symbol">${pos.symbol}</td>
@@ -122,6 +132,7 @@ function updateDashboard(data) {
                     <td class="${pos.roi >= 0 ? 'profit' : 'loss'}">${pos.roi.toFixed(2)}%</td>
                     <td>$${pos.positionSizeUsdt.toFixed(2)}</td>
                     <td>${pos.balancePercent.toFixed(2)}%</td>
+                    <td>${durationStr}</td>
                     <td>
                         <button onclick="closePosition('${pos.symbol}')" class="btn-sm btn-danger">Close</button>
                     </td>
