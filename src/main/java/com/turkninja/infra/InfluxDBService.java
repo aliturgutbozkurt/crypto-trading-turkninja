@@ -113,7 +113,7 @@ public class InfluxDBService {
      * Write trade execution
      */
     public void writeTrade(String symbol, String side, double entryPrice, double quantity,
-            double positionSizeUsdt, Instant timestamp) {
+            double positionSizeUsdt, Instant timestamp, String orderId) {
         if (!enabled)
             return;
 
@@ -121,6 +121,7 @@ public class InfluxDBService {
             Point point = Point.measurement("trades")
                     .addTag("symbol", symbol)
                     .addTag("side", side)
+                    .addTag("order_id", orderId) // Unique ID to prevent duplicates
                     .addField("entry_price", entryPrice)
                     .addField("quantity", quantity)
                     .addField("position_size_usdt", positionSizeUsdt)
@@ -137,7 +138,7 @@ public class InfluxDBService {
     /**
      * Write position open event (for entry time tracking)
      */
-    public void writePositionOpen(String symbol, String side, double entryPrice, Instant timestamp) {
+    public void writePositionOpen(String symbol, String side, double entryPrice, Instant timestamp, String orderId) {
         if (!enabled)
             return;
 
@@ -145,6 +146,7 @@ public class InfluxDBService {
             Point point = Point.measurement("position_opens")
                     .addTag("symbol", symbol)
                     .addTag("side", side)
+                    .addTag("order_id", orderId) // Unique ID
                     .addField("entry_price", entryPrice)
                     .addField("entry_time_ms", timestamp.toEpochMilli())
                     .time(timestamp, WritePrecision.MS);
@@ -194,9 +196,8 @@ public class InfluxDBService {
     /**
      * Write position close event
      */
-    public void writePositionClose(String symbol, String side, double entryPrice, double exitPrice,
-            double pnl, String reason, long durationSeconds,
-            Instant timestamp) {
+    public void writePositionClose(String symbol, String side, double entryPrice, double exitPrice, double quantity,
+            double pnl, double durationSeconds, String reason, Instant timestamp, String orderId) {
         if (!enabled)
             return;
 
@@ -205,11 +206,12 @@ public class InfluxDBService {
                     .addTag("symbol", symbol)
                     .addTag("side", side)
                     .addTag("reason", reason)
+                    .addTag("order_id", orderId) // Unique ID
                     .addField("entry_price", entryPrice)
                     .addField("exit_price", exitPrice)
+                    .addField("quantity", quantity)
                     .addField("pnl", pnl)
                     .addField("duration_seconds", durationSeconds)
-                    .addField("win", pnl > 0 ? 1 : 0)
                     .time(timestamp, WritePrecision.MS);
 
             writeApi.writePoint(point);

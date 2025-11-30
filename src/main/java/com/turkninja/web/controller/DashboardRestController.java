@@ -51,7 +51,24 @@ public class DashboardRestController {
         try {
             JSONArray positionsArray = webSocketService.getCachedPositions();
             JSONObject account = webSocketService.getCachedAccountInfo();
-            double balance = account != null ? account.optDouble("totalMarginBalance", 0.0) : 0.0;
+            double balance = 0.0;
+
+            // 1. Try getting balance from cache (handle both keys)
+            if (account != null) {
+                balance = account.optDouble("totalMarginBalance", account.optDouble("totalWalletBalance", 0.0));
+            }
+
+            // 2. Fallback to REST API if cache is empty or zero
+            if (balance == 0) {
+                try {
+                    String accountJson = futuresService.getAccountInfo();
+                    JSONObject accountRest = new JSONObject(accountJson);
+                    balance = accountRest.optDouble("totalMarginBalance",
+                            accountRest.optDouble("totalWalletBalance", 0.0));
+                } catch (Exception e) {
+                    // Ignore fallback failure
+                }
+            }
 
             if (positionsArray != null) {
                 for (int i = 0; i < positionsArray.length(); i++) {

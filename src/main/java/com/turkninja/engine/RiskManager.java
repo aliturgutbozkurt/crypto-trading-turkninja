@@ -327,15 +327,18 @@ public class RiskManager {
                             java.time.Instant.parse(position.entryTime),
                             java.time.Instant.now()).getSeconds();
 
+                    String orderId = java.util.UUID.randomUUID().toString(); // Unique ID for partial close
                     influxDBService.writePositionClose(
                             symbol,
                             position.side,
                             position.entryPrice,
                             currentPrice,
+                            position.quantity * closePercent, // Quantity closed
                             partialPnl,
-                            "PARTIAL_TP",
                             durationSeconds,
-                            java.time.Instant.now());
+                            "PARTIAL_TP",
+                            java.time.Instant.now(),
+                            orderId);
 
                     // Push to WebSocket
                     if (webSocketPushService != null) {
@@ -554,9 +557,9 @@ public class RiskManager {
             // Record position close to InfluxDB
             // Record position close to InfluxDB
             if (influxDBService != null && influxDBService.isEnabled()) {
-                influxDBService.writePositionClose(symbol, position.side, position.entryPrice, currentPrice, pnl,
-                        reason,
-                        durationSeconds, java.time.Instant.now());
+                String orderId = java.util.UUID.randomUUID().toString(); // Unique ID for close
+                influxDBService.writePositionClose(symbol, position.side, position.entryPrice, currentPrice, quantity,
+                        pnl, durationSeconds, reason, java.time.Instant.now(), orderId);
 
                 // Push to WebSocket
                 if (webSocketPushService != null) {

@@ -14,7 +14,6 @@ import org.json.JSONObject;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.ta4j.core.BarSeries;
-import org.ta4j.core.BaseBarSeriesBuilder;
 
 import java.math.BigDecimal;
 import java.time.Duration;
@@ -28,7 +27,6 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.CompletableFuture;
-import java.util.function.Supplier;
 
 public class StrategyEngine {
     private static final Logger logger = LoggerFactory.getLogger(StrategyEngine.class);
@@ -54,7 +52,7 @@ public class StrategyEngine {
     // diversification
     private List<String> tradingSymbols = Arrays.asList(
             "BTCUSDT", "ETHUSDT", "SOLUSDT", "AVAXUSDT", "DOGEUSDT",
-            "XRPUSDT", "MATICUSDT", "LTCUSDT", "ETCUSDT", "SUIUSDT");
+            "XRPUSDT", "MATICUSDT", "LTCUSDT", "ETCUSDT");
 
     private ScheduledExecutorService tradingScheduler;
     private ScheduledExecutorService batchProcessor; // Processes batched signals
@@ -170,32 +168,16 @@ public class StrategyEngine {
         logger.info("✅ Async order executor initialized with Virtual Threads");
 
         // Load configurable entry filter parameters
-        rsiLongMin = Double.parseDouble(Config.get("strategy.rsi.long.min", "50"));
-        rsiLongMax = Double.parseDouble(Config.get("strategy.rsi.long.max", "78"));
-        rsiShortMin = Double.parseDouble(Config.get("strategy.rsi.short.min", "22"));
-        rsiShortMax = Double.parseDouble(Config.get("strategy.rsi.short.max", "50"));
-        macdSignalTolerance = Double.parseDouble(Config.get("strategy.macd.signal.tolerance", "0.00001"));
-        emaBufferPercent = Double.parseDouble(Config.get("strategy.ema.buffer.percent", "0.007"));
-
-        // Disabled indicators removed (NWE, RSI Bands, Super Trend)
-
-        // Load new filters for High Win Rate Strategy
-        adxEnabled = Boolean.parseBoolean(Config.get("strategy.adx.enabled", "true"));
-        adxMinStrength = Double.parseDouble(Config.get("strategy.adx.min.strength", "25"));
-
-        emaSlopeEnabled = Boolean.parseBoolean(Config.get("strategy.ema.slope.enabled", "true"));
-        emaSlopePeriod = Integer.parseInt(Config.get("strategy.ema.slope.period", "50"));
-        emaSlopeLookback = Integer.parseInt(Config.get("strategy.ema.slope.lookback", "10"));
-        emaSlopeMinPercent = Double.parseDouble(Config.get("strategy.ema.slope.min.percent", "0.05"));
-
-        volumeFilterEnabled = Boolean.parseBoolean(Config.get("strategy.volume.filter.enabled", "true"));
-        volumeMinMultiplier = Double.parseDouble(Config.get("strategy.volume.min.multiplier", "1.2"));
-        volumePeriod = Integer.parseInt(Config.get("strategy.volume.period", "20"));
+        rsiLongMin = Integer.parseInt(Config.get("strategy.rsi.long.min", "50"));
+        rsiLongMax = Integer.parseInt(Config.get("strategy.rsi.long.max", "78"));
+        rsiShortMin = Integer.parseInt(Config.get("strategy.rsi.short.min", "22"));
+        rsiShortMax = Integer.parseInt(Config.get("strategy.rsi.short.max", "50"));
+        rsiBuyThreshold = Integer.parseInt(Config.get("strategy.rsi.buy.threshold", "30"));
+        rsiSellThreshold = Integer.parseInt(Config.get("strategy.rsi.sell.threshold", "70"));
 
         logger.info(
-                "Strategy Config Loaded: RSI [{}-{}] / [{}-{}], EMA Buffer: {}%, Multi-TF: {}, ADX: {}, EMA Slope: {}, Volume: {}",
-                rsiLongMin, rsiLongMax, rsiShortMin, rsiShortMax, emaBufferPercent * 100,
-                adxEnabled, emaSlopeEnabled, volumeFilterEnabled);
+                "Strategy Config Loaded: RSI [{}-{}] / [{}-{}]",
+                rsiLongMin, rsiLongMax, rsiShortMin, rsiShortMax);
 
         // Batch signal selection config
         this.batchModeEnabled = Boolean.parseBoolean(Config.get("strategy.batch.enabled", "true"));
@@ -203,26 +185,13 @@ public class StrategyEngine {
         this.minSignalScore = Config.getDouble("strategy.signal.min.score", 50.0);
     }
 
-    // Configurable entry filter parameters
-    private double rsiLongMin;
-    private double rsiLongMax;
-    private double rsiShortMin;
-    private double rsiShortMax;
-    private double macdSignalTolerance;
-    private double emaBufferPercent;
-
-    // Disabled indicators removed (NWE, RSI Bands, Super Trend)
-
-    // High Win Rate Strategy Filters
-    private boolean adxEnabled;
-    private double adxMinStrength;
-    private boolean emaSlopeEnabled;
-    private int emaSlopePeriod;
-    private int emaSlopeLookback;
-    private double emaSlopeMinPercent;
-    private boolean volumeFilterEnabled;
-    private double volumeMinMultiplier;
-    private int volumePeriod;
+    // Strategy Parameters (loaded from config)
+    private final int rsiLongMin;
+    private final int rsiLongMax;
+    private final int rsiShortMin;
+    private final int rsiShortMax;
+    private final int rsiBuyThreshold;
+    private final int rsiSellThreshold;
 
     // Note: RSI ranges are now dynamically calculated by AdaptiveParameterService
     // instead of static fields (Phase 1.1)
@@ -710,9 +679,10 @@ public class StrategyEngine {
 
             // 8. Record trade and position open to InfluxDB
             Instant now = java.time.Instant.now();
+            String orderId = java.util.UUID.randomUUID().toString(); // Generate unique ID for deduplication
             if (influxDBService != null && influxDBService.isEnabled()) {
-                influxDBService.writeTrade(symbol, side, price, quantity, positionSize, now);
-                influxDBService.writePositionOpen(symbol, side, price, now); // Track entry time
+                influxDBService.writeTrade(symbol, side, price, quantity, positionSize, now, orderId);
+                influxDBService.writePositionOpen(symbol, side, price, now, orderId); // Track entry time
             }
 
             // 9. Send Telegram Notification (Only if successful)
@@ -725,7 +695,7 @@ public class StrategyEngine {
 
             // 11. Alert: Sound + Red console output
             System.out.print("\007"); // System beep
-            String redColor = "\u001B[31m";
+            // String redColor = "\u001B[31m"; // Unused
             String resetColor = "\u001B[0m";
             String boldRed = "\u001B[1;31m";
             System.out.println(boldRed + "═══════════════════════════════════════════════════════════" + resetColor);

@@ -306,6 +306,8 @@ public class FuturesWebSocketService {
                         // Create a REST API compatible account info object
                         JSONObject restApiFormat = new JSONObject();
                         restApiFormat.put("totalWalletBalance", totalWalletBalance);
+                        restApiFormat.put("totalMarginBalance", totalWalletBalance); // Approximation for UI
+                                                                                     // compatibility
 
                         // Update cached account info
                         cachedAccountInfo = restApiFormat;

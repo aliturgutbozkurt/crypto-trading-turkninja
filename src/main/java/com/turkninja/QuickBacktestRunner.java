@@ -22,7 +22,7 @@ public class QuickBacktestRunner {
     // All trading symbols
     private static final List<String> ALL_SYMBOLS = Arrays.asList(
             "BTCUSDT", "ETHUSDT", "SOLUSDT", "AVAXUSDT", "DOGEUSDT",
-            "XRPUSDT", "MATICUSDT", "LTCUSDT", "ETCUSDT", "SUIUSDT");
+            "XRPUSDT", "MATICUSDT", "LTCUSDT", "ETCUSDT");
 
     public static void main(String[] args) {
         String startDate = "2025-10-27"; // 1 month ago (updated to current year)

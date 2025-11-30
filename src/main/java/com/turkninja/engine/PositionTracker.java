@@ -32,8 +32,8 @@ public class PositionTracker {
         this.riskManager = riskManager;
 
         // Load TP/SL/Trailing from config
-        this.takeProfitPercent = Config.getDouble("strategy.tp.percent", 0.006); // Default 0.6%
-        this.stopLossPercent = Config.getDouble("strategy.sl.percent", 0.003); // Default 0.3%
+        this.takeProfitPercent = Config.getDouble("risk.take_profit_percent", 0.006); // Default 0.6%
+        this.stopLossPercent = Config.getDouble("risk.stop_loss_percent", 0.003); // Default 0.3%
         this.trailingStopPercent = Config.getDouble("strategy.trailing.stop.percent", 0.002); // Default 0.2%
 
         logger.info("Position Tracker initialized (TP: {}%, SL: {}%, Trailing: {}%)",

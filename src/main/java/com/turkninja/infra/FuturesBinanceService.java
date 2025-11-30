@@ -46,7 +46,7 @@ public class FuturesBinanceService {
     // Symbols to trade with 20x leverage
     private static final String[] TRADING_SYMBOLS = {
             "BTCUSDT", "ETHUSDT", "SOLUSDT", "AVAXUSDT", "DOGEUSDT",
-            "XRPUSDT", "MATICUSDT", "LTCUSDT", "ETCUSDT", "SUIUSDT"
+            "XRPUSDT", "MATICUSDT", "LTCUSDT", "ETCUSDT"
     };
 
     public FuturesBinanceService() {
