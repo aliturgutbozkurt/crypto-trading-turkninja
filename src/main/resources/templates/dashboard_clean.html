@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title th:text="${title}">TurkNinja Trading Bot</title>
+    <link rel="stylesheet" th:href="@{/css/styles.css}">
+    <link rel="stylesheet" th:href="@{/css/buttons.css}">
+</head>
+
+<body>
+    <div class="container">
+        <header>
+            <div class="header-top">
+                <div class="brand">
+                    <h1>🤖 TurkNinja Bot</h1>
+                    <p class="subtitle">Futures 20x Leverage Dashboard</p>
+                </div>
+                <div class="header-controls">
+                    <h2 class="section-title">Live Trading Dashboard</h2>
+                    <div class="actions">
+                        <button onclick="reloadPositions()" class="btn btn-primary">🔄 Reload</button>
+                        <button onclick="emergencyExit()" class="btn btn-danger">🚨 Emergency Exit</button>
+                    </div>
+                </div>
+            </div>
+        </header>
+
+        <!-- Stats Grid -->
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-label">Total Balance</div>
+                <div class="stat-value" id="totalBalance">$0.00</div>
+            </div>
+            <div class="stat-card" id="pnlCard">
+                <div class="stat-label">Unrealized PnL</div>
+                <div class="stat-value" id="unrealizedPnL">$0.00</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Active Positions</div>
+                <div class="stat-value" id="activePositions">0</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Strategy Status</div>
+                <div class="stat-value" id="strategyStatus">Loading...</div>
+            </div>
+        </div>
+
+        <!-- Manuel Trade Section -->
+        <div class="manual-trade-section" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 20px; border-radius: 12px; margin: 20px 0; box-shadow: 0 4px 12px rgba(0,0,0,0.3);">
+            <h3 style="color: white; margin-bottom: 15px;">📝 Manuel Trade</h3>
+            <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+                <select id="manualSymbol" style="padding: 10px; border-radius: 6px; border: none; font-size: 14px; min-width: 150px;">
+                    <option value="">Coin Seç...</option>
+                    <option value="BTCUSDT">BTC/USDT</option>
+                    <option value="ETHUSDT">ETH/USDT</option>
+                    <option value="SOLUSDT">SOL/USDT</option>
+                    <option value="DOGEUSDT">DOGE/USDT</option>
+                    <option value="XRPUSDT">XRP/USDT</option>
+                    <option value="AVAXUSDT">AVAX/USDT</option>
+                    <option value="LTCUSDT">LTC/USDT</option>
+                    <option value="LUNA2USDT">LUNA2/USDT</option>
+                    <option value="TAOUSDT">TAO/USDT</option>
+                    <option value="ASTERUSDT">ASTER/USDT</option>
+                </select>
+                
+                <select id="balancePercent" style="padding: 10px; border-radius: 6px; border: none; font-size: 14px; min-width: 120px;">
+                    <option value="25">%25 Bakiye</option>
+                    <option value="50">%50 Bakiye</option>
+                    <option value="75">%75 Bakiye</option>
+                    <option value="100">%100 Bakiye</option>
+                </select>
+                
+                <button onclick="openManualTrade('BUY')" class="btn" style="background: #27ae60; color: white; padding: 10px 20px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">
+                    🟢 LONG Aç
+                </button>
+                <button onclick="openManualTrade('SELL')" class="btn" style="background: #e74c3c; color: white; padding: 10px 20px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">
+                    �� SHORT Aç
+                </button>
+                <span id="manualTradeStatus" style="color: white; font-size: 14px;"></span>
+            </div>
+            <p style="color: rgba(255,255,255,0.8); font-size: 12px; margin-top: 10px;">
+                💡 Seçilen bakiye yüzdesi 20x kaldıraçla kullanılır
+            </p>
+        </div>
+
+        <!-- Positions Table -->
+        <div class="positions-section">
+            <h3>📊 Active Positions</h3>
+            <div id="statusMessage" class="status-message"></div>
+            <table id="positionsTable">
+                <thead>
+                    <tr>
+                        <th>Symbol</th>
+                        <th>Side</th>
+                        <th>Entry Price</th>
+                        <th>Current Price</th>
+                        <th>P&L</th>
+                        <th>ROI</th>
+                        <th>Size (USDT)</th>
+                        <th>Balance %</th>
+                        <th>Duration</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+                <tbody id="positionsBody">
+                    <tr>
+                        <td colspan="10" class="no-data">No active positions. Strategy is scanning...</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Trading Signals Section -->
+        <div class="signals-section">
+            <h3>📡 Trading Signals (Real-Time)</h3>
+            <div id="signalsList"></div>
+        </div>
+
+        <footer>
+            <p>Last updated: <span id="lastUpdate">Never</span></p>
+            <p class="disclaimer">⚠️ High-risk trading with 20x leverage. Auto SL: 0.6%, TP: 1.2%, Trailing: 0.3%</p>
+        </footer>
+    </div>
+
+    <!-- Audio Notifications -->
+    <script th:src="@{/js/audio-notifications.js}"></script>
+
+    <!-- Dashboard Script -->
+    <script th:src="@{/js/dashboard.js?v=6}"></script>
+</body>
+
+</html>

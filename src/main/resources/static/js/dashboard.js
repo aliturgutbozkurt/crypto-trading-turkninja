@@ -476,3 +476,77 @@ function renderMetrics(stats) {
     document.getElementById('bestTrade').textContent = `${bestSign}$${bestTrade.toFixed(2)}`;
     document.getElementById('bestTrade').style.color = bestColor;
 }
+
+// Audio Notification Integration
+// Monitor positions for changes
+let lastPositions = [];
+
+// Wrap updateDashboard to include audio notifications
+const originalUpdateDashboard = updateDashboard;
+updateDashboard = function(data) {
+    // Call original function
+    originalUpdateDashboard(data);
+    
+    // Check for position changes and play sounds
+    if (data.positions && audioNotifier) {
+        audioNotifier.checkPositions(data.positions);
+    }
+};
+
+
+// Manuel Trade Function
+async function openManualTrade(side) {
+    const symbol = document.getElementById('manualSymbol').value;
+    const balancePercent = parseInt(document.getElementById('balancePercent').value);
+    const statusEl = document.getElementById('manualTradeStatus');
+    
+    if (!symbol) {
+        statusEl.textContent = '⚠️ Lütfen coin seçin!';
+        statusEl.style.color = '#f39c12';
+        setTimeout(() => statusEl.textContent = '', 3000);
+        return;
+    }
+    
+    const sideText = side === 'BUY' ? 'LONG 🟢' : 'SHORT 🔴';
+    if (!confirm(`${sideText} pozisyonu açmak istediğinize emin misiniz?\n\nCoin: ${symbol}\nYön: ${sideText}\nBakiye: %${balancePercent}`)) {
+        return;
+    }
+    
+    statusEl.textContent = '⏳ Pozisyon açılıyor...';
+    statusEl.style.color = '#3498db';
+    
+    try {
+        const response = await fetch('/api/manual-trade', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                symbol: symbol,
+                side: side,
+                balancePercent: balancePercent
+            })
+        });
+        
+        const result = await response.json();
+        
+        if (result.success) {
+            statusEl.textContent = `✅ ${result.message}`;
+            statusEl.style.color = '#27ae60';
+            
+            // Reload positions after 1 second
+            setTimeout(() => {
+                reloadPositions();
+                statusEl.textContent = '';
+            }, 2000);
+        } else {
+            statusEl.textContent = `❌ Hata: ${result.error}`;
+            statusEl.style.color = '#e74c3c';
+            setTimeout(() => statusEl.textContent = '', 5000);
+        }
+    } catch (error) {
+        statusEl.textContent = `❌ Bağlantı hatası: ${error.message}`;
+        statusEl.style.color = '#e74c3c';
+        setTimeout(() => statusEl.textContent = '', 5000);
+    }
+}

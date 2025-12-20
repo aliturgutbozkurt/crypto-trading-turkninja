@@ -102,10 +102,11 @@ public class AppStartupRunner implements CommandLineRunner {
                 }
 
                 List<String> symbols = Arrays.asList("BTCUSDT", "ETHUSDT", "SOLUSDT", "AVAXUSDT", "DOGEUSDT",
-                        "XRPUSDT", "MATICUSDT", "LTCUSDT", "ETCUSDT");
+                        "XRPUSDT", "MATICUSDT", "LTCUSDT", "ETCUSDT", 
+                        "ASTERUSDT", "TAOUSDT");
                 for (String sym : symbols) {
-                    // Fetch 15m klines and populate cache
-                    loadKlinesToCache(sym, "15m");
+                    // Fetch 5m klines and populate cache
+                    loadKlinesToCache(sym, "5m");
                 }
             } catch (Exception e) {
                 logger.warn("REST fallback failed to populate caches: {}", e.getMessage());
@@ -122,7 +123,8 @@ public class AppStartupRunner implements CommandLineRunner {
             });
             // Start Kline stream for all symbols (5m candles)
             List<String> klineSymbols = Arrays.asList("BTCUSDT", "ETHUSDT", "SOLUSDT", "AVAXUSDT", "DOGEUSDT",
-                    "XRPUSDT", "MATICUSDT", "LTCUSDT", "ETCUSDT");
+                    "XRPUSDT", "MATICUSDT", "LTCUSDT", "ETCUSDT", 
+                    "ASTERUSDT", "TAOUSDT");
             webSocketService.startKlineStream(klineSymbols);
             logger.info("Kline stream started");
 

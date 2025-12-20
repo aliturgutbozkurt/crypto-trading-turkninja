@@ -52,6 +52,8 @@ public class RSIMomentumFilter implements StrategyCriteria {
     @Override
     public boolean evaluate(String symbol, org.ta4j.core.BarSeries series, Map<String, Double> indicators,
             double currentPrice, boolean isLong) {
+        boolean enabled = Boolean.parseBoolean(Config.get("strategy.rsi.filter.enabled", "true"));
+        if (!enabled) return true;
         Double rsi = indicators.get("RSI");
         if (rsi == null) {
             logger.warn("⚠️ RSI indicator missing for {}, allowing trade", symbol);
