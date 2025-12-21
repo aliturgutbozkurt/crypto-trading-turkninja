@@ -27,3 +27,7 @@ app_output.txt
 
 # Virtual machine crash logs
 hs_err_pid*
+
+# Backtest Artifacts
+backtest_data/
+backtest_reports/
