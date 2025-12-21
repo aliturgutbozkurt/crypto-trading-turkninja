@@ -119,6 +119,10 @@ public class MultiTimeframeService {
         TrendAnalysis analysis = new TrendAnalysis();
 
         try {
+            if (webSocketService == null) {
+                return new TrendAnalysis("NEUTRAL", 0);
+            }
+
             int totalStrength = 0;
 
             // Analyze primary timeframe (1h or 4h)
@@ -208,6 +212,10 @@ public class MultiTimeframeService {
      */
     private String analyzeTrend(String symbol) {
         try {
+            if (webSocketService == null) {
+                return "NEUTRAL";
+            }
+
             // Fetch cached klines from WebSocket
             List<JSONObject> klines = webSocketService.getCachedKlines(symbol, higherTimeframe, 100);
 

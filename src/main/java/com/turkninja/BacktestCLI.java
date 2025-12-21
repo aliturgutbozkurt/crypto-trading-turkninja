@@ -7,6 +7,8 @@ import com.turkninja.infra.MockFuturesBinanceService;
 import com.turkninja.model.BacktestReport;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import java.util.List;
+import java.util.ArrayList;
 
 /**
  * Backtest CLI - Command Line Interface for running backtests
@@ -41,6 +43,65 @@ public class BacktestCLI {
         String endDate = args[2];
         String timeframe = args[3];
 
+        // Check for Optimization Mode
+        if (symbol.equals("OPTIMIZE")) {
+            // Usage: OPTIMIZE <Symbol> <Start> <End> <Timeframe>
+            // Shift args: symbol becomes args[1]
+            if (args.length < 5) {
+                System.out.println("Usage: OPTIMIZE <Symbol> <Start> <End> <Timeframe>");
+                System.exit(1);
+            }
+            symbol = args[1].toUpperCase();
+            startDate = args[2];
+            endDate = args[3];
+            timeframe = args[4];
+
+            System.out.println("🤖 Starting Strategy Optimizer for " + symbol);
+
+            // PROGRAMMATICALLY SILENCE LOGS
+            ((ch.qos.logback.classic.Logger) LoggerFactory.getLogger("com.turkninja.engine.StrategyEngine"))
+                    .setLevel(ch.qos.logback.classic.Level.WARN);
+            ((ch.qos.logback.classic.Logger) LoggerFactory.getLogger("com.turkninja.engine.BacktestEngine"))
+                    .setLevel(ch.qos.logback.classic.Level.WARN);
+            ((ch.qos.logback.classic.Logger) LoggerFactory.getLogger("com.turkninja.engine.RiskManager"))
+                    .setLevel(ch.qos.logback.classic.Level.WARN);
+            ((ch.qos.logback.classic.Logger) LoggerFactory.getLogger("com.turkninja.infra.MockFuturesBinanceService"))
+                    .setLevel(ch.qos.logback.classic.Level.WARN);
+            ((ch.qos.logback.classic.Logger) LoggerFactory.getLogger("com.turkninja.engine.criteria"))
+                    .setLevel(ch.qos.logback.classic.Level.WARN);
+            ((ch.qos.logback.classic.Logger) LoggerFactory.getLogger("com.turkninja.infra.FuturesBinanceService"))
+                    .setLevel(ch.qos.logback.classic.Level.WARN);
+            try {
+                // Initialize services for data fetching
+                FuturesBinanceService realBinanceService = new FuturesBinanceService(true);
+                MockFuturesBinanceService mockService = new MockFuturesBinanceService();
+                IndicatorService indicatorService = new IndicatorService();
+
+                // Fetch Historical Data ONCE
+                System.out.println("📥 Fetching historical data...");
+                BacktestEngine loader = new BacktestEngine(null, mockService, realBinanceService, indicatorService);
+
+                List<org.ta4j.core.Bar> history = loader.loadHistoricalData(symbol, startDate, endDate, timeframe);
+
+                // Mute logs for optimization
+                ((ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger("com.turkninja"))
+                        .setLevel(ch.qos.logback.classic.Level.WARN);
+                ((ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory
+                        .getLogger("com.turkninja.engine.StrategyEngine")).setLevel(ch.qos.logback.classic.Level.ERROR);
+                ((ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory
+                        .getLogger("com.turkninja.infra.MockFuturesBinanceService"))
+                        .setLevel(ch.qos.logback.classic.Level.ERROR);
+
+                // Run Optimization
+                StrategyOptimizer optimizer = new StrategyOptimizer();
+                optimizer.optimize(symbol, history, timeframe);
+
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+            return;
+        }
+
         // Validate inputs
         if (!isValidDate(startDate) || !isValidDate(endDate)) {
             System.err.println("❌ Invalid date format. Use YYYY-MM-DD");
@@ -69,12 +130,16 @@ public class BacktestCLI {
             // Create PositionTracker for backtest (essential for trade execution)
             PositionTracker positionTracker = new PositionTracker();
 
+            // Create MockRiskManager for backtest (SL/TP support)
+            MockRiskManager riskManager = new MockRiskManager(positionTracker, mockService);
+            positionTracker.setRiskManager(riskManager); // complete circular wiring
+
             // Create StrategyEngine with PositionTracker
             StrategyEngine strategyEngine = new StrategyEngine(
                     null, // No WebSocket in backtest
                     mockService, // Use mock service as FuturesBinanceService
                     indicatorService,
-                    null, // RiskManager - not used in backtest
+                    riskManager, // Use MockRiskManager
                     positionTracker, // PositionTracker for trade tracking
                     null, // No OrderBookService
                     null, // No TelegramNotifier

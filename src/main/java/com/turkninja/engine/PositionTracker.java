@@ -15,9 +15,13 @@ import java.util.concurrent.ConcurrentHashMap;
 public class PositionTracker {
     private static final Logger logger = LoggerFactory.getLogger(PositionTracker.class);
 
-    private final RiskManager riskManager;
+    private RiskManager riskManager;
     private KellyPositionSizer kellyPositionSizer; // Optional: for dynamic position sizing
     private final Map<String, Position> activePositions = new ConcurrentHashMap<>();
+
+    public void setRiskManager(RiskManager riskManager) {
+        this.riskManager = riskManager;
+    }
 
     // Configuration for Active Trading (Percentage-based)
     private final double takeProfitPercent;

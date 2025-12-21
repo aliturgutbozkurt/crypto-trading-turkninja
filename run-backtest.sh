@@ -35,7 +35,7 @@ fi
 # Run backtest
 echo "🚀 Running backtest..."
 mvn exec:java -Dexec.mainClass="com.turkninja.BacktestCLI" \
-    -Dexec.args="$SYMBOL $START_DATE $END_DATE $TIMEFRAME" \
+    -Dexec.args="$*" \
     -q
 
 echo ""

@@ -181,12 +181,12 @@ public class StrategyEngine {
         logger.info("✅ Async order executor initialized with Virtual Threads");
 
         // Load configurable entry filter parameters
-        rsiLongMin = Integer.parseInt(Config.get("strategy.rsi.long.min", "50"));
-        rsiLongMax = Integer.parseInt(Config.get("strategy.rsi.long.max", "78"));
-        rsiShortMin = Integer.parseInt(Config.get("strategy.rsi.short.min", "22"));
-        rsiShortMax = Integer.parseInt(Config.get("strategy.rsi.short.max", "50"));
-        rsiBuyThreshold = Integer.parseInt(Config.get("strategy.rsi.buy.threshold", "30"));
-        rsiSellThreshold = Integer.parseInt(Config.get("strategy.rsi.sell.threshold", "70"));
+        rsiLongMin = (int) Double.parseDouble(Config.get("strategy.rsi.long.min", "50"));
+        rsiLongMax = (int) Double.parseDouble(Config.get("strategy.rsi.long.max", "78"));
+        rsiShortMin = (int) Double.parseDouble(Config.get("strategy.rsi.short.min", "22"));
+        rsiShortMax = (int) Double.parseDouble(Config.get("strategy.rsi.short.max", "50"));
+        rsiBuyThreshold = (int) Double.parseDouble(Config.get("strategy.rsi.buy.threshold", "30"));
+        rsiSellThreshold = (int) Double.parseDouble(Config.get("strategy.rsi.sell.threshold", "70"));
 
         logger.info(
                 "Strategy Config Loaded: RSI [{}-{}] / [{}-{}]",
@@ -335,6 +335,12 @@ public class StrategyEngine {
     private void analyzeBTC() {
         try {
             String symbol = "BTCUSDT";
+
+            // Backtest check
+            if (webSocketService == null) {
+                return;
+            }
+
             // Get klines from WebSocket cache (NO REST API CALL)
             List<JSONObject> klines = webSocketService.getCachedKlines(symbol, "1m", 100);
             if (klines.isEmpty()) {
@@ -1074,6 +1080,11 @@ public class StrategyEngine {
         }
 
         try {
+            // Check for null (Backtesting)
+            if (webSocketService == null) {
+                return Config.getDouble("risk.dynamic.sl.base.percent", 0.02);
+            }
+
             // Get 5m klines for ATR calculation
             List<JSONObject> klines5m = webSocketService.getCachedKlines(symbol, "1m", 50);
 

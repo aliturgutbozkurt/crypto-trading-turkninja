@@ -65,7 +65,7 @@ if [ ! -z "$ML_ENABLED" ]; then
     echo "🤖 Starting ML Signal Classifier Service..."
     if [ -f "ml_service/signal_model.pkl" ]; then
         cd ml_service
-        nohup python3 -m uvicorn signal_classifier:app --host 0.0.0.0 --port 8000 > ../ml_service.log 2>&1 &
+        nohup ../venv/bin/python3 -m uvicorn signal_classifier:app --host 0.0.0.0 --port 8000 > ../ml_service.log 2>&1 &
         ML_PID=$!
         echo $ML_PID > ../ml_service.pid
         cd ..
@@ -76,7 +76,7 @@ if [ ! -z "$ML_ENABLED" ]; then
             echo "⚠️  ML Service started but health check failed"
         fi
     else
-        echo "⚠️  ML model not trained yet. Run: cd ml_service && python train_model.py"
+        echo "⚠️  ML model not trained yet. Run: cd ml_service && ../venv/bin/python3 train_model.py"
     fi
 else
     echo "ℹ️  ML Signal Validator is disabled (set ml.signal.validator.enabled=true to enable)"

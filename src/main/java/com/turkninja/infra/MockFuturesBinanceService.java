@@ -10,6 +10,7 @@ import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
  * Mock Futures Binance Service for Backtesting
@@ -25,9 +26,15 @@ public class MockFuturesBinanceService extends FuturesBinanceService {
     private double virtualBalance = 1000.0; // Starting virtual balance
     private final Map<String, VirtualPosition> virtualPositions = new ConcurrentHashMap<>();
     private final Map<String, Double> currentPrices = new ConcurrentHashMap<>();
-    private final List<OrderRecord> orderHistory = new ArrayList<>();
-    private final List<com.turkninja.model.BacktestReport.TradeEntry> tradeHistory = new ArrayList<>(); // For backtest
+    private final List<OrderRecord> orderHistory = new CopyOnWriteArrayList<>();
+    private final List<com.turkninja.model.BacktestReport.TradeEntry> tradeHistory = new CopyOnWriteArrayList<>();
     private long nextOrderId = 1L;
+    private long currentTimestamp = System.currentTimeMillis(); // Default to system time
+    // feeRate removed (defined as final below)
+
+    public void setCurrentTime(long timestamp) {
+        this.currentTimestamp = timestamp;
+    }
 
     /**
      * Virtual position data
@@ -39,12 +46,12 @@ public class MockFuturesBinanceService extends FuturesBinanceService {
         double entryPrice;
         long entryTime;
 
-        VirtualPosition(String symbol, String side, double quantity, double entryPrice) {
+        VirtualPosition(String symbol, String side, double entryPrice, double quantity, long entryTime) {
             this.symbol = symbol;
             this.side = side;
             this.quantity = quantity;
             this.entryPrice = entryPrice;
-            this.entryTime = System.currentTimeMillis();
+            this.entryTime = entryTime;
         }
     }
 
@@ -59,13 +66,13 @@ public class MockFuturesBinanceService extends FuturesBinanceService {
         public double price;
         public long timestamp;
 
-        public OrderRecord(long orderId, String symbol, String side, double quantity, double price) {
+        public OrderRecord(long orderId, String symbol, String side, double quantity, double price, long timestamp) {
             this.orderId = orderId;
             this.symbol = symbol;
             this.side = side;
             this.quantity = quantity;
             this.price = price;
-            this.timestamp = System.currentTimeMillis();
+            this.timestamp = timestamp;
         }
     }
 
@@ -164,11 +171,16 @@ public class MockFuturesBinanceService extends FuturesBinanceService {
             virtualBalance -= commission;
 
             // Update/create position
-            VirtualPosition position = virtualPositions.computeIfAbsent(symbol,
-                    k -> new VirtualPosition(symbol, side, quantity, currentPrice));
+            VirtualPosition position = new VirtualPosition(
+                    symbol,
+                    side,
+                    currentPrice,
+                    quantity,
+                    currentTimestamp); // Use simulation time
+            virtualPositions.put(symbol, position);
 
             // Record order
-            orderHistory.add(new OrderRecord(orderId, symbol, side, quantity, currentPrice));
+            orderHistory.add(new OrderRecord(orderId, symbol, side, quantity, currentPrice, currentTimestamp));
 
             logger.debug("✅ MOCK Order: {} {} {} @ ${} (Commission: ${})",
                     side, quantity, symbol, currentPrice, String.format("%.4f", commission));
@@ -233,25 +245,76 @@ public class MockFuturesBinanceService extends FuturesBinanceService {
                     position.side,
                     position.entryPrice,
                     position.quantity);
-            trade.exitTime = ZonedDateTime.now(ZoneId.of("UTC"));
+            trade.exitTime = ZonedDateTime.ofInstant(Instant.ofEpochMilli(currentTimestamp), ZoneId.of("UTC"));
             trade.exitPrice = currentPrice;
             trade.pnl = pnl;
-            trade.pnlPercent = (pnl / (position.entryPrice * position.quantity)) * 100;
-            trade.exitReason = "BACKTEST_CLOSE";
-            trade.commission = exitCommission; // Store the actual exit commission
-
             tradeHistory.add(trade);
         } catch (Exception e) {
-            logger.error("Error recording trade to history", e);
+            logger.error("Error recording trade history", e);
         }
 
-        JSONObject response = new JSONObject();
-        response.put("symbol", symbol);
-        response.put("status", "CLOSED");
-        response.put("pnl", pnl);
-        response.put("exitPrice", currentPrice);
+        return "{\"info\": \"Position closed\"}";
+    }
 
-        return response.toString();
+    @Override
+    public String closePositionPartial(String symbol, double quantity) {
+        VirtualPosition position = virtualPositions.get(symbol);
+
+        if (position == null) {
+            logger.warn("No position to partial close for {}", symbol);
+            return "{\"info\": \"No open position\"}";
+        }
+
+        Double currentPrice = currentPrices.get(symbol);
+        if (currentPrice == null) {
+            logger.error("No price data for {} to close position", symbol);
+            return "{\"error\": \"No price data\"}";
+        }
+
+        // Validate quantity
+        if (quantity >= position.quantity) {
+            return closePosition(symbol); // Close full if quantity >= position
+        }
+
+        // Calculate P&L for partial amount
+        double pnl;
+        if ("BUY".equals(position.side)) {
+            pnl = (currentPrice - position.entryPrice) * quantity;
+        } else { // SELL
+            pnl = (position.entryPrice - currentPrice) * quantity;
+        }
+
+        // Apply exit commission for partial amount
+        double notionalValue = quantity * currentPrice;
+        double exitCommission = notionalValue * feeRate;
+        pnl -= exitCommission;
+
+        // Update balance
+        virtualBalance += pnl;
+
+        // Update Position Quantity
+        position.quantity -= quantity;
+
+        logger.debug("✅ MOCK Partial Close: {} {} - Entry: ${}, Exit: ${}, PnL: ${}",
+                symbol, quantity, position.entryPrice, currentPrice, String.format("%.2f", pnl));
+
+        // Record Partial Trade
+        try {
+            com.turkninja.model.BacktestReport.TradeEntry trade = new com.turkninja.model.BacktestReport.TradeEntry(
+                    ZonedDateTime.ofInstant(Instant.ofEpochMilli(position.entryTime),
+                            ZoneId.of("UTC")),
+                    position.side,
+                    position.entryPrice,
+                    quantity);
+            trade.exitTime = ZonedDateTime.ofInstant(Instant.ofEpochMilli(currentTimestamp), ZoneId.of("UTC"));
+            trade.exitPrice = currentPrice;
+            trade.pnl = pnl;
+            tradeHistory.add(trade);
+        } catch (Exception e) {
+            logger.error("Error recording trade history", e);
+        }
+
+        return "{\"info\": \"Position partially closed\"}";
     }
 
     @Override

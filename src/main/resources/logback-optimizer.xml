@@ -1,0 +1,18 @@
+<configuration>
+    <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <root level="WARN">
+        <appender-ref ref="STDOUT" />
+    </root>
+
+    <!-- Silence general engine logs -->
+    <logger name="com.turkninja" level="WARN" />
+    
+    <!-- Keep Optimizer logs visible -->
+    <logger name="com.turkninja.engine.StrategyOptimizer" level="INFO" />
+    <logger name="com.turkninja.BacktestCLI" level="INFO" />
+</configuration>

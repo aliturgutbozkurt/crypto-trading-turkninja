@@ -121,6 +121,10 @@ public class BacktestEngine {
             // 1. Update Market Data
             series.addBar(bar);
             double closePrice = bar.getClosePrice().doubleValue();
+
+            // Update time in mock service
+            long candleTime = bar.getEndTime().toEpochMilli();
+            mockFuturesService.setCurrentTime(candleTime);
             mockFuturesService.setCurrentPrice(symbol, closePrice);
 
             // Check for exits (SL/TP/Trailing) - if RiskManager is available
@@ -192,7 +196,7 @@ public class BacktestEngine {
      * @param interval  Timeframe (5m, 15m, 1h, etc.)
      * @return List of Bars
      */
-    private List<Bar> loadHistoricalData(String symbol, String startDate, String endDate, String interval) {
+    public List<Bar> loadHistoricalData(String symbol, String startDate, String endDate, String interval) {
         List<Bar> bars = new ArrayList<>();
         String cacheDir = "backtest_data";
         String fileName = String.format("%s/%s_%s_%s_%s.json", cacheDir, symbol, interval, startDate, endDate);
