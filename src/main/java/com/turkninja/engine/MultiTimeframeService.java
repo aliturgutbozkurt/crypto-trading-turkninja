@@ -27,7 +27,7 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * Multi-Timeframe Analysis Service (Phase 2)
  * Verifies trend direction on higher timeframes (1h, 4h) before allowing entry
- * on 5m
+ * on 15m
  * Prevents counter-trend trades and improves win rate
  */
 public class MultiTimeframeService {

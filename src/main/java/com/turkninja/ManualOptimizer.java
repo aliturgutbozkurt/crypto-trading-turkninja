@@ -167,7 +167,7 @@ public class ManualOptimizer {
                 BacktestEngine backtestEngine = new BacktestEngine(
                         engine, mockService, realBinanceService, indicatorService);
 
-                BacktestReport report = backtestEngine.runBacktest(symbol, startDate, endDate, "5m");
+                BacktestReport report = backtestEngine.runBacktest(symbol, startDate, endDate, "15m");
 
                 if (report != null) {
                     results.add(new ProfileResult(profile.name, report));

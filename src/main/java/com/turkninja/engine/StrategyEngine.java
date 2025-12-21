@@ -238,8 +238,8 @@ public class StrategyEngine {
                 String symbol = kline.getString("s");
                 String interval = kline.getString("i");
 
-                // We only care about 5m candles (as configured in WebSocketService)
-                if (!"5m".equals(interval))
+                // We only care about 15m candles (as configured in WebSocketService)
+                if (!"15m".equals(interval))
                     return;
 
                 // 1. Analyze BTC Trend first if it's BTC
@@ -270,7 +270,7 @@ public class StrategyEngine {
             }
         });
 
-        logger.info("Automated trading started (Event-Driven: 5m Candle Close)");
+        logger.info("Automated trading started (Event-Driven: 15m Candle Close)");
         logger.info("Monitoring symbols: {}", tradingSymbols);
 
         // Start batch processor if enabled
@@ -334,7 +334,7 @@ public class StrategyEngine {
         try {
             String symbol = "BTCUSDT";
             // Get klines from WebSocket cache (NO REST API CALL)
-            List<JSONObject> klines = webSocketService.getCachedKlines(symbol, "5m", 100);
+            List<JSONObject> klines = webSocketService.getCachedKlines(symbol, "15m", 100);
             if (klines.isEmpty()) {
                 logger.warn("No cached klines for {}, skipping analysis", symbol);
                 return;
@@ -373,11 +373,11 @@ public class StrategyEngine {
         }
 
         try {
-            // Fetch Data (5m only)
-            List<JSONObject> klines5m = webSocketService.getCachedKlines(symbol, "5m", 100);
+            // Fetch Data (15m only)
+            List<JSONObject> klines5m = webSocketService.getCachedKlines(symbol, "15m", 100);
 
             if (klines5m.isEmpty()) {
-                logger.warn("Insufficient cached klines for {} (5m: {}), skipping",
+                logger.warn("Insufficient cached klines for {} (15m: {}), skipping",
                         symbol, klines5m.size());
                 return;
             }
@@ -420,7 +420,7 @@ public class StrategyEngine {
         try {
             // ----- STEP 1: Calculate Indicators -----
             // Calculate indicators once (used by all filters and strategies)
-            // Uses 5m data, hybrid strategy chooses between Trend-Following vs
+            // Uses 15m data, hybrid strategy chooses between Trend-Following vs
             // Mean-Reversion
             Map<String, Double> indicators5m;
 
@@ -854,9 +854,9 @@ public class StrategyEngine {
     public void analyze(String symbol) {
         try {
             // 1. Get Klines (5m)
-            List<JSONObject> klines5m = webSocketService.getCachedKlines(symbol, "5m", 200);
+            List<JSONObject> klines5m = webSocketService.getCachedKlines(symbol, "15m", 200);
             if (klines5m.size() < 50) {
-                logger.warn("Not enough 5m data for {}: {}", symbol, klines5m.size());
+                logger.warn("Not enough 15m data for {}: {}", symbol, klines5m.size());
                 return;
             }
 
@@ -1073,7 +1073,7 @@ public class StrategyEngine {
 
         try {
             // Get 5m klines for ATR calculation
-            List<JSONObject> klines5m = webSocketService.getCachedKlines(symbol, "5m", 50);
+            List<JSONObject> klines5m = webSocketService.getCachedKlines(symbol, "15m", 50);
 
             if (klines5m.size() < 14) {
                 logger.warn("{} Insufficient data for ATR, using base SL", symbol);

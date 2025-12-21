@@ -114,7 +114,7 @@ public class CrossValidationBacktest {
                                                                 indicatorService);
 
                                                 BacktestReport report = backtestEngine.runBacktest(
-                                                                symbol, period.startDate, period.endDate, "5m");
+                                                                symbol, period.startDate, period.endDate, "15m");
 
                                                 if (report != null) {
                                                         periodReports.add(report);
