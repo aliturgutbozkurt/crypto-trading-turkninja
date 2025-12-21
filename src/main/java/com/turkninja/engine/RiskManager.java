@@ -464,8 +464,16 @@ public class RiskManager {
         }
 
         monitoringActive = true;
-        monitoringExecutor.scheduleAtFixedRate(this::monitorPositions, 0, 1, TimeUnit.SECONDS);
-        logger.info("Position monitoring started (checking every 1 second)");
+
+        // Register for Mark Price WebSocket events (event-driven)
+        if (webSocketService != null) {
+            webSocketService.setMarkPriceUpdateListener(this::onMarkPriceUpdate);
+            logger.info("✅ Event-driven Mark Price monitoring activated (real-time SL/TP)");
+        }
+
+        // Keep fallback polling at reduced frequency (every 5 seconds)
+        monitoringExecutor.scheduleAtFixedRate(this::monitorPositions, 5, 5, TimeUnit.SECONDS);
+        logger.info("Position monitoring started (event-driven + 5s fallback)");
     }
 
     /**
@@ -473,7 +481,48 @@ public class RiskManager {
      */
     public void stopMonitoring() {
         monitoringActive = false;
+        if (webSocketService != null) {
+            webSocketService.setMarkPriceUpdateListener(null);
+        }
         logger.info("Position monitoring stopped");
+    }
+
+    /**
+     * Event-driven Mark Price update handler
+     * Called by WebSocket on every mark price update (real-time)
+     * This is much faster than the 1s polling loop for SL/TP reactions
+     */
+    public void onMarkPriceUpdate(org.json.JSONObject data) {
+        if (!monitoringActive)
+            return;
+
+        try {
+            String symbol = data.getString("s");
+            double markPrice = data.getDouble("p");
+
+            // Check if we have a position for this symbol
+            PositionTracker.Position position = positionTracker.getPosition(symbol);
+            if (position == null)
+                return;
+
+            // Check SL/TP conditions
+            PositionTracker.PositionAction action = positionTracker.checkPosition(symbol, markPrice);
+
+            if (action == PositionTracker.PositionAction.CLOSE_STOP_LOSS) {
+                closePosition(symbol, position, "STOP_LOSS", markPrice);
+            } else if (action == PositionTracker.PositionAction.CLOSE_TAKE_PROFIT) {
+                closePosition(symbol, position, "TAKE_PROFIT", markPrice);
+            } else {
+                // Check Trailing Stop
+                boolean trailingStopTriggered = checkExitCondition(symbol, java.math.BigDecimal.valueOf(markPrice),
+                        position.side.equals("BUY"));
+                if (trailingStopTriggered) {
+                    closePosition(symbol, position, "TRAILING_STOP", markPrice);
+                }
+            }
+        } catch (Exception e) {
+            logger.debug("Error processing mark price update: {}", e.getMessage());
+        }
     }
 
     /**

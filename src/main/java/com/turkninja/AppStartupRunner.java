@@ -170,6 +170,14 @@ public class AppStartupRunner implements CommandLineRunner {
             webSocketService.startMarkPriceStream(symbols.toArray(new String[0]));
             logger.info("Started Mark Price Stream for {} symbols", symbols.size());
 
+            // Preload 1m klines into cache so StrategyEngine can start immediately
+            logger.info("⏳ Preloading 1m klines for {} symbols...", symbols.size());
+            for (String symbol : symbols) {
+                // Load 200 candles (1m) to satisfy StrategyEngine requirement
+                loadKlinesToCache(symbol, "1m", 200);
+            }
+            logger.info("✅ Kline preloading complete");
+
             // CRITICAL: Sync existing positions with RiskManager BEFORE starting monitoring
             // This ensures trailing stops work for positions opened before restart
             try {

@@ -317,4 +317,119 @@ public class IndicatorService {
 
         return atr.getValue(series.getEndIndex()).doubleValue();
     }
+
+    /**
+     * Calculate Hurst Exponent using Rescaled Range (R/S) Analysis
+     * 
+     * The Hurst Exponent (H) indicates:
+     * - H > 0.5: Trending (persistent) market - use Trend Following
+     * - H < 0.5: Mean reverting (anti-persistent) market - use Mean Reversion
+     * - H ≈ 0.5: Random walk - no clear regime
+     * 
+     * @param series Bar series
+     * @param period Number of periods for calculation (typically 100-200)
+     * @return Hurst exponent value (0-1)
+     */
+    public double calculateHurstExponent(BarSeries series, int period) {
+        if (series == null || series.getBarCount() < period) {
+            return 0.5; // Default: random walk
+        }
+
+        try {
+            // Get log returns
+            double[] logReturns = new double[period - 1];
+            int startIdx = series.getEndIndex() - period + 1;
+
+            for (int i = 0; i < period - 1; i++) {
+                double current = series.getBar(startIdx + i + 1).getClosePrice().doubleValue();
+                double previous = series.getBar(startIdx + i).getClosePrice().doubleValue();
+                logReturns[i] = Math.log(current / previous);
+            }
+
+            // Calculate R/S for different subseries lengths
+            List<Double> logN = new ArrayList<>();
+            List<Double> logRS = new ArrayList<>();
+
+            // Use subseries of different lengths
+            int[] subSizes = { 8, 16, 32, 64 };
+
+            for (int n : subSizes) {
+                if (n >= period)
+                    continue;
+
+                List<Double> rsValues = new ArrayList<>();
+                int numSubSeries = logReturns.length / n;
+
+                for (int j = 0; j < numSubSeries; j++) {
+                    int start = j * n;
+
+                    // Mean of subseries
+                    double mean = 0;
+                    for (int k = 0; k < n; k++) {
+                        mean += logReturns[start + k];
+                    }
+                    mean /= n;
+
+                    // Cumulative deviations
+                    double[] cumDev = new double[n];
+                    cumDev[0] = logReturns[start] - mean;
+                    for (int k = 1; k < n; k++) {
+                        cumDev[k] = cumDev[k - 1] + (logReturns[start + k] - mean);
+                    }
+
+                    // Range
+                    double max = cumDev[0], min = cumDev[0];
+                    for (double v : cumDev) {
+                        if (v > max)
+                            max = v;
+                        if (v < min)
+                            min = v;
+                    }
+                    double range = max - min;
+
+                    // Standard deviation
+                    double variance = 0;
+                    for (int k = 0; k < n; k++) {
+                        variance += Math.pow(logReturns[start + k] - mean, 2);
+                    }
+                    double stdDev = Math.sqrt(variance / n);
+
+                    if (stdDev > 0) {
+                        rsValues.add(range / stdDev);
+                    }
+                }
+
+                if (!rsValues.isEmpty()) {
+                    double avgRS = rsValues.stream().mapToDouble(Double::doubleValue).average().orElse(0);
+                    if (avgRS > 0) {
+                        logN.add(Math.log(n));
+                        logRS.add(Math.log(avgRS));
+                    }
+                }
+            }
+
+            // Linear regression to find Hurst exponent (slope)
+            if (logN.size() >= 2) {
+                double sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0;
+                int count = logN.size();
+
+                for (int i = 0; i < count; i++) {
+                    sumX += logN.get(i);
+                    sumY += logRS.get(i);
+                    sumXY += logN.get(i) * logRS.get(i);
+                    sumX2 += logN.get(i) * logN.get(i);
+                }
+
+                double hurst = (count * sumXY - sumX * sumY) / (count * sumX2 - sumX * sumX);
+
+                // Clamp to valid range
+                return Math.max(0.0, Math.min(1.0, hurst));
+            }
+
+        } catch (Exception e) {
+            // Return neutral value on error
+        }
+
+        return 0.5; // Default: random walk
+    }
 }

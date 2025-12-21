@@ -171,8 +171,10 @@ public class StrategyEngine {
         logger.info("✅ Kelly Position Sizer initialized: enabled={}, hasSufficientHistory={}",
                 kellyPositionSizer.isEnabled(), kellyPositionSizer.hasSufficientHistory());
 
-        // Connect Kelly to PositionTracker for trade recording
-        positionTracker.setKellyPositionSizer(kellyPositionSizer);
+        // Connect Kelly to PositionTracker for trade recording (if available)
+        if (positionTracker != null) {
+            positionTracker.setKellyPositionSizer(kellyPositionSizer);
+        }
 
         // Initialize async order executor with Virtual Threads (Phase 1.2)
         this.orderExecutor = Executors.newVirtualThreadPerTaskExecutor();
@@ -238,8 +240,8 @@ public class StrategyEngine {
                 String symbol = kline.getString("s");
                 String interval = kline.getString("i");
 
-                // We only care about 15m candles (as configured in WebSocketService)
-                if (!"15m".equals(interval))
+                // We only care about 1m candles (as configured in WebSocketService)
+                if (!"1m".equals(interval))
                     return;
 
                 // 1. Analyze BTC Trend first if it's BTC
@@ -334,7 +336,7 @@ public class StrategyEngine {
         try {
             String symbol = "BTCUSDT";
             // Get klines from WebSocket cache (NO REST API CALL)
-            List<JSONObject> klines = webSocketService.getCachedKlines(symbol, "15m", 100);
+            List<JSONObject> klines = webSocketService.getCachedKlines(symbol, "1m", 100);
             if (klines.isEmpty()) {
                 logger.warn("No cached klines for {}, skipping analysis", symbol);
                 return;
@@ -373,11 +375,11 @@ public class StrategyEngine {
         }
 
         try {
-            // Fetch Data (15m only)
-            List<JSONObject> klines5m = webSocketService.getCachedKlines(symbol, "15m", 100);
+            // Fetch Data (1m only)
+            List<JSONObject> klines5m = webSocketService.getCachedKlines(symbol, "1m", 100);
 
             if (klines5m.isEmpty()) {
-                logger.warn("Insufficient cached klines for {} (15m: {}), skipping",
+                logger.warn("Insufficient cached klines for {} (1m: {}), skipping",
                         symbol, klines5m.size());
                 return;
             }
@@ -643,8 +645,8 @@ public class StrategyEngine {
             // 1. Calculate position size
             double positionSize = calculatePositionSize(symbol, price, regime);
 
-            // 2. Check correlation risk (NEW - Phase 1.1)
-            if (!riskManager.checkCorrelationRisk(symbol, side)) {
+            // 2. Check correlation risk (skip in backtest if no RiskManager)
+            if (riskManager != null && !riskManager.checkCorrelationRisk(symbol, side)) {
                 logger.warn("⏸️ {} {} blocked by correlation filter", symbol, side);
                 return; // Don't enter - too correlated with existing positions
             }
@@ -658,8 +660,8 @@ public class StrategyEngine {
                 return;
             }
 
-            // 2. Check risk limits
-            if (!riskManager.canOpenPosition(positionSize)) {
+            // 4. Check risk limits (skip in backtest if no RiskManager)
+            if (riskManager != null && !riskManager.canOpenPosition(positionSize)) {
                 logger.warn("Risk limits prevent opening position for {}", symbol);
                 pushSignal(symbol, side, "Blocked: Risk Limits (Max Pos/Daily Loss)", price, false, "BLOCKED_RISK");
                 return;
@@ -853,10 +855,10 @@ public class StrategyEngine {
 
     public void analyze(String symbol) {
         try {
-            // 1. Get Klines (5m)
-            List<JSONObject> klines5m = webSocketService.getCachedKlines(symbol, "15m", 200);
+            // 1. Get Klines (1m)
+            List<JSONObject> klines5m = webSocketService.getCachedKlines(symbol, "1m", 200);
             if (klines5m.size() < 50) {
-                logger.warn("Not enough 15m data for {}: {}", symbol, klines5m.size());
+                logger.warn("Not enough 1m data for {}: {}", symbol, klines5m.size());
                 return;
             }
 
@@ -1073,7 +1075,7 @@ public class StrategyEngine {
 
         try {
             // Get 5m klines for ATR calculation
-            List<JSONObject> klines5m = webSocketService.getCachedKlines(symbol, "15m", 50);
+            List<JSONObject> klines5m = webSocketService.getCachedKlines(symbol, "1m", 50);
 
             if (klines5m.size() < 14) {
                 logger.warn("{} Insufficient data for ATR, using base SL", symbol);

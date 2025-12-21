@@ -329,6 +329,43 @@ public class FuturesBinanceService {
         return RateLimiter.decorateSupplier(rateLimiter, klineSupplier).get();
     }
 
+    /**
+     * Get Klines with start/end time (for paginated historical loading)
+     * 
+     * @param symbol    Trading symbol
+     * @param interval  Timeframe (e.g., "15m", "1h")
+     * @param limit     Max candles per request (1500 max)
+     * @param startTime Start time in milliseconds
+     * @param endTime   End time in milliseconds
+     * @return JSON array of klines
+     */
+    public String getKlinesWithTime(String symbol, String interval, int limit, long startTime, long endTime) {
+        Supplier<String> klineSupplier = () -> {
+            try {
+                LinkedHashMap<String, Object> parameters = new LinkedHashMap<>();
+                parameters.put("symbol", symbol);
+                parameters.put("interval", interval);
+                parameters.put("limit", limit);
+                parameters.put("startTime", startTime);
+                parameters.put("endTime", endTime);
+
+                String queryString = buildQueryString(parameters);
+                String url = FUTURES_BASE_URL + "/fapi/v1/klines?" + queryString;
+
+                Request request = new Request.Builder().url(url).build();
+                try (Response response = httpClient.newCall(request).execute()) {
+                    return response.body() != null ? response.body().string() : "[]";
+                }
+            } catch (Exception e) {
+                logger.error("Failed to get klines for {} ({}-{})", symbol, startTime, endTime, e);
+                return "[]";
+            }
+        };
+
+        // Apply RateLimiter
+        return RateLimiter.decorateSupplier(rateLimiter, klineSupplier).get();
+    }
+
     public double getSymbolPriceTicker(String symbol) {
         try {
             LinkedHashMap<String, Object> parameters = new LinkedHashMap<>();

@@ -72,6 +72,13 @@ public class MockFuturesBinanceService extends FuturesBinanceService {
     private final double feeRate;
     private final double slippage;
 
+    /**
+     * Default constructor with standard backtest settings
+     */
+    public MockFuturesBinanceService() {
+        this(1000.0);
+    }
+
     public MockFuturesBinanceService(double initialBalance) {
         this(initialBalance, 0.0004, 0.0);
     }
@@ -90,6 +97,31 @@ public class MockFuturesBinanceService extends FuturesBinanceService {
      */
     public void setCurrentPrice(String symbol, double price) {
         currentPrices.put(symbol, price);
+    }
+
+    /**
+     * Override getQuantityPrecision for backtest (no API call needed)
+     * Returns reasonable defaults for common trading pairs
+     */
+    @Override
+    public int getQuantityPrecision(String symbol) {
+        if (symbol == null)
+            return 3;
+
+        // BTC and ETH have 3 decimal precision
+        if (symbol.startsWith("BTC") || symbol.startsWith("ETH")) {
+            return 3;
+        }
+        // SOL, AVAX etc have 2-3 precision
+        if (symbol.startsWith("SOL") || symbol.startsWith("AVAX") || symbol.startsWith("LTC")) {
+            return 3;
+        }
+        // Small coins like DOGE, XRP have higher precision
+        if (symbol.startsWith("DOGE") || symbol.startsWith("XRP")) {
+            return 1;
+        }
+        // Default to 3 for most pairs
+        return 3;
     }
 
     @Override

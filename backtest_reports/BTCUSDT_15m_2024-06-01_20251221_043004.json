@@ -1,0 +1,10 @@
+{
+  "symbol": "BTCUSDT",
+  "timeframe": "15m",
+  "totalTrades": 1,
+  "winRate": 0.00,
+  "netProfit": -144.40,
+  "profitFactor": 0.00,
+  "maxDrawdown": 0.14,
+  "sharpeRatio": -1.20
+}

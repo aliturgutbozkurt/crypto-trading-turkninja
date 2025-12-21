@@ -43,6 +43,13 @@ public class PositionTracker {
     }
 
     /**
+     * Default constructor for backtest mode (no RiskManager)
+     */
+    public PositionTracker() {
+        this(null);
+    }
+
+    /**
      * Track a new position with default TP/SL (backward compatibility)
      */
     public void trackPosition(String symbol, String side, double entryPrice, double quantity) {

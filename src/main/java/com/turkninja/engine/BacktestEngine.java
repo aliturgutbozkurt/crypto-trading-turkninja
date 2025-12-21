@@ -123,8 +123,10 @@ public class BacktestEngine {
             double closePrice = bar.getClosePrice().doubleValue();
             mockFuturesService.setCurrentPrice(symbol, closePrice);
 
-            // Check for exits (SL/TP/Trailing) - Critical for backtest!
-            strategyEngine.getRiskManager().onPriceUpdate(symbol, closePrice);
+            // Check for exits (SL/TP/Trailing) - if RiskManager is available
+            if (strategyEngine.getRiskManager() != null) {
+                strategyEngine.getRiskManager().onPriceUpdate(symbol, closePrice);
+            }
 
             // 2. Execute Strategy Logic (only if we have enough bars for indicators)
             if (i >= 50) { // Need 50+ bars for indicators like EMA50
@@ -200,42 +202,70 @@ public class BacktestEngine {
             java.nio.file.Files.createDirectories(java.nio.file.Paths.get(cacheDir));
 
             java.io.File cacheFile = new java.io.File(fileName);
-            String klineData;
+            JSONArray allKlines;
 
             if (cacheFile.exists()) {
                 logger.info("📂 Loading cached data for {} from {}", symbol, fileName);
-                klineData = new String(java.nio.file.Files.readAllBytes(cacheFile.toPath()));
+                String klineData = new String(java.nio.file.Files.readAllBytes(cacheFile.toPath()));
+                allKlines = new JSONArray(klineData);
             } else {
                 logger.info("📥 Downloading historical data: {} {} from {} to {}",
                         symbol, interval, startDate, endDate);
 
-                // Binance allows max 1500 candles per request
+                // Parse dates and convert to timestamps
+                java.time.LocalDate start = java.time.LocalDate.parse(startDate);
+                java.time.LocalDate end = java.time.LocalDate.parse(endDate);
+                long startTimeMs = start.atStartOfDay(java.time.ZoneOffset.UTC).toInstant().toEpochMilli();
+                long endTimeMs = end.atStartOfDay(java.time.ZoneOffset.UTC).toInstant().toEpochMilli();
+
+                allKlines = new JSONArray();
                 int limit = 1500;
+                long currentStartMs = startTimeMs;
+                long intervalMs = getIntervalMillis(interval);
 
-                // Fetch klines
-                klineData = realBinanceService.getKlines(symbol, interval, limit);
+                // Paginated loading
+                while (currentStartMs < endTimeMs) {
+                    String klineData = realBinanceService.getKlinesWithTime(symbol, interval, limit, currentStartMs,
+                            endTimeMs);
 
-                if (klineData != null && !klineData.isEmpty() && !klineData.equals("[]")) {
-                    // Save to cache
+                    if (klineData == null || klineData.isEmpty() || klineData.equals("[]")) {
+                        break;
+                    }
+
+                    JSONArray batch = new JSONArray(klineData);
+                    if (batch.length() == 0) {
+                        break;
+                    }
+
+                    // Add all candles from this batch
+                    for (int i = 0; i < batch.length(); i++) {
+                        allKlines.put(batch.getJSONArray(i));
+                    }
+
+                    // Move to next batch
+                    JSONArray lastCandle = batch.getJSONArray(batch.length() - 1);
+                    long lastCloseTime = lastCandle.getLong(6);
+                    currentStartMs = lastCloseTime + 1;
+
+                    logger.info("📊 Downloaded {} candles (total: {})", batch.length(), allKlines.length());
+
+                    // Rate limit protection
+                    Thread.sleep(100);
+                }
+
+                // Save to cache
+                if (allKlines.length() > 0) {
                     try {
-                        java.nio.file.Files.write(cacheFile.toPath(), klineData.getBytes());
-                        logger.info("💾 Saved data to cache: {}", fileName);
+                        java.nio.file.Files.write(cacheFile.toPath(), allKlines.toString().getBytes());
+                        logger.info("💾 Saved {} candles to cache: {}", allKlines.length(), fileName);
                     } catch (Exception e) {
                         logger.warn("Failed to save cache file", e);
                     }
                 }
             }
 
-            if (klineData == null || klineData.isEmpty()) {
+            if (allKlines.length() == 0) {
                 logger.warn("⚠️ No data received for {}", symbol);
-                return bars;
-            }
-
-            // Parse JSON
-            JSONArray klines = new JSONArray(klineData);
-
-            if (klines.length() == 0) {
-                logger.warn("⚠️ Empty kline data for {}", symbol);
                 return bars;
             }
 
@@ -244,9 +274,9 @@ public class BacktestEngine {
                     .withName(symbol)
                     .build();
 
-            // Convert to Bars (use series.addBar() for compatibility)
-            for (int i = 0; i < klines.length(); i++) {
-                JSONArray kline = klines.getJSONArray(i);
+            // Convert to Bars
+            for (int i = 0; i < allKlines.length(); i++) {
+                JSONArray kline = allKlines.getJSONArray(i);
 
                 long openTime = kline.getLong(0);
                 double open = kline.getDouble(1);
@@ -254,9 +284,7 @@ public class BacktestEngine {
                 double low = kline.getDouble(3);
                 double close = kline.getDouble(4);
                 double volume = kline.getDouble(5);
-                long closeTime = kline.getLong(6);
 
-                // Add bar directly to series (compatibility with ta4j)
                 Duration duration = Duration.ofMillis(getIntervalMillis(interval));
                 Instant beginTime = Instant.ofEpochMilli(openTime);
                 Instant endTime = beginTime.plus(duration);
@@ -269,8 +297,8 @@ public class BacktestEngine {
                         DecimalNum.valueOf(low),
                         DecimalNum.valueOf(close),
                         DecimalNum.valueOf(volume),
-                        DecimalNum.valueOf(0), // amount
-                        0L); // trades
+                        DecimalNum.valueOf(0),
+                        0L);
                 series.addBar(bar);
             }
 

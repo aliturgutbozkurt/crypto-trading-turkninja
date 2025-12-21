@@ -71,19 +71,25 @@ public class MarketRegimeDetector {
             double atr = indicators.getOrDefault("ATR", 0.0);
             double volatilityPercent = (atr / currentPrice) * 100.0;
 
-            // 4. Determine trend direction
+            // 4. Calculate Hurst Exponent (H > 0.5 = trending, H < 0.5 = mean reverting)
+            double hurstExponent = indicatorService.calculateHurstExponent(series, 100);
+            boolean hurstTrending = hurstExponent > 0.55; // Clear trending signal
+            boolean hurstMeanReverting = hurstExponent < 0.45; // Clear mean reversion signal
+
+            // 5. Determine trend direction
             boolean priceAboveEMA = currentPrice > ema50;
             boolean emaSlopePositive = emaSlope > 0;
             boolean emaSlopeNegative = emaSlope < 0;
             boolean strongSlope = Math.abs(emaSlope) > emaSlopeStrong;
 
-            // 5. Classify regime
-            MarketRegime regime = classifyRegime(
+            // 6. Classify regime (enhanced with Hurst)
+            MarketRegime regime = classifyRegimeWithHurst(
                     adx, volatilityPercent, priceAboveEMA,
-                    emaSlopePositive, emaSlopeNegative, strongSlope);
+                    emaSlopePositive, emaSlopeNegative, strongSlope,
+                    hurstExponent, hurstTrending, hurstMeanReverting);
 
-            logger.debug("Regime {}: ADX={:.1f}, Vol={:.2f}%, EMASlope={:.3f}%, Price {}EMA",
-                    regime, adx, volatilityPercent, emaSlope * 100,
+            logger.debug("Regime {}: ADX={:.1f}, Vol={:.2f}%, Hurst={:.3f}, EMASlope={:.3f}%, Price {}EMA",
+                    regime, adx, volatilityPercent, hurstExponent, emaSlope * 100,
                     priceAboveEMA ? ">" : "<");
 
             return regime;
@@ -141,6 +147,80 @@ public class MarketRegimeDetector {
             } else {
                 // Medium volatility ranging
                 return MarketRegime.RANGING_HIGH_VOL; // Default to high vol for mean reversion
+            }
+        }
+    }
+
+    /**
+     * Classify market regime with Hurst Exponent confirmation
+     * Hurst provides mathematical verification of trending vs mean reverting
+     * behavior
+     * 
+     * @param hurstExponent      H value (0-1)
+     * @param hurstTrending      true if H > 0.55 (persistent/trending)
+     * @param hurstMeanReverting true if H < 0.45 (anti-persistent/mean reverting)
+     */
+    private MarketRegime classifyRegimeWithHurst(double adx, double volatilityPercent,
+            boolean priceAboveEMA, boolean emaSlopePositive,
+            boolean emaSlopeNegative, boolean strongSlope,
+            double hurstExponent, boolean hurstTrending, boolean hurstMeanReverting) {
+
+        // If Hurst strongly indicates mean reversion (H < 0.45), prefer ranging
+        if (hurstMeanReverting && adx < adxTrendMin) {
+            if (volatilityPercent > volatilityHigh) {
+                return MarketRegime.RANGING_HIGH_VOL;
+            } else {
+                return MarketRegime.RANGING_LOW_VOL;
+            }
+        }
+
+        // If Hurst strongly indicates trending (H > 0.55) AND ADX confirms
+        if (hurstTrending && adx >= adxTrendMin * 0.8) { // Relaxed ADX threshold with Hurst confirmation
+            if (priceAboveEMA && emaSlopePositive) {
+                return strongSlope ? MarketRegime.STRONG_UPTREND : MarketRegime.WEAK_UPTREND;
+            } else if (!priceAboveEMA && emaSlopeNegative) {
+                return strongSlope ? MarketRegime.STRONG_DOWNTREND : MarketRegime.WEAK_DOWNTREND;
+            }
+        }
+
+        // Strong Trending Markets (ADX > threshold)
+        if (adx >= adxTrendMin) {
+            if (priceAboveEMA && emaSlopePositive) {
+                return strongSlope ? MarketRegime.STRONG_UPTREND : MarketRegime.WEAK_UPTREND;
+            } else if (!priceAboveEMA && emaSlopeNegative) {
+                return strongSlope ? MarketRegime.STRONG_DOWNTREND : MarketRegime.WEAK_DOWNTREND;
+            } else {
+                // ADX high but conflicting signals - check Hurst for guidance
+                if (hurstMeanReverting) {
+                    return MarketRegime.RANGING_HIGH_VOL;
+                }
+                return MarketRegime.CHOPPY;
+            }
+        }
+
+        // Weak Trending Markets
+        else if (adx > adxRangeMax && adx < adxTrendMin) {
+            // Hurst can override weak ADX signals
+            if (hurstTrending && priceAboveEMA && emaSlopePositive) {
+                return MarketRegime.WEAK_UPTREND;
+            } else if (hurstTrending && !priceAboveEMA && emaSlopeNegative) {
+                return MarketRegime.WEAK_DOWNTREND;
+            } else if (hurstMeanReverting) {
+                return volatilityPercent > volatilityHigh ? MarketRegime.RANGING_HIGH_VOL
+                        : MarketRegime.RANGING_LOW_VOL;
+            } else {
+                return MarketRegime.CHOPPY;
+            }
+        }
+
+        // Ranging Markets (ADX < range threshold)
+        else {
+            if (volatilityPercent > volatilityHigh) {
+                return MarketRegime.RANGING_HIGH_VOL;
+            } else if (volatilityPercent < volatilityLow) {
+                return MarketRegime.RANGING_LOW_VOL;
+            } else {
+                return MarketRegime.RANGING_HIGH_VOL;
             }
         }
     }

@@ -171,7 +171,7 @@ public class FuturesWebSocketService {
                     streamBuilder.append("/");
                 }
                 String symbol = symbols.get(i).toLowerCase();
-                streamBuilder.append(symbol).append("@kline_15m");
+                streamBuilder.append(symbol).append("@kline_1m");
             }
 
             String wsUrl = streamBuilder.toString();
