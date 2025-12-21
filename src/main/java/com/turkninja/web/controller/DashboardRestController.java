@@ -172,6 +172,19 @@ public class DashboardRestController {
     @GetMapping("/account")
     public AccountDTO getAccount() {
         try {
+            // Check if paper trading mode is enabled
+            boolean isDryRun = Boolean
+                    .parseBoolean(com.turkninja.config.Config.get(com.turkninja.config.Config.DRY_RUN, "false"));
+            double paperTradingBalance = com.turkninja.config.Config.getDouble("paper.trading.initial_balance", 100.0);
+
+            if (isDryRun) {
+                // Paper Trading Mode - return virtual balance
+                String strategyStatus = strategyEngine != null && strategyEngine.isTradingActive() ? "Active (Paper)"
+                        : "Stopped";
+                logger.info("📝 Paper Trading Mode: Virtual balance = ${}", paperTradingBalance);
+                return new AccountDTO(paperTradingBalance, 0.0, 0.0, 0, strategyStatus);
+            }
+
             JSONObject account = webSocketService.getCachedAccountInfo();
 
             if (account != null) {

@@ -27,6 +27,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Semaphore;
 
 public class StrategyEngine {
     private static final Logger logger = LoggerFactory.getLogger(StrategyEngine.class);
@@ -52,7 +53,7 @@ public class StrategyEngine {
     // diversification
     private List<String> tradingSymbols = Arrays.asList(
             "BTCUSDT", "ETHUSDT", "SOLUSDT", "AVAXUSDT", "DOGEUSDT",
-            "XRPUSDT", "MATICUSDT", "LTCUSDT", "ETCUSDT", 
+            "XRPUSDT", "MATICUSDT", "LTCUSDT", "ETCUSDT",
             "ASTERUSDT", "TAOUSDT");
 
     private ScheduledExecutorService tradingScheduler;
@@ -71,6 +72,9 @@ public class StrategyEngine {
 
     // Strategy Filters (Phase 2 - Chain of Responsibility)
     private final List<StrategyCriteria> strategyFilters;
+
+    // Concurrency control for Virtual Threads - prevents unbounded thread growth
+    private final Semaphore analysisSemaphore = new Semaphore(5); // Max 5 concurrent analyses
 
     // Backtest Optimization
     private Map<String, org.ta4j.core.Indicator<org.ta4j.core.num.Num>> cachedIndicators;
@@ -240,11 +244,18 @@ public class StrategyEngine {
                 // 2. Analyze Trading Symbols
                 if (tradingSymbols.contains(symbol) && !symbol.equals("BTCUSDT")) {
                     // Use Virtual Thread for analysis to avoid blocking WebSocket thread
+                    // Semaphore prevents unbounded thread growth during high-frequency periods
                     Thread.ofVirtual().start(() -> {
+                        if (!analysisSemaphore.tryAcquire()) {
+                            logger.warn("⚠️ Max concurrent analysis limit reached, skipping {}", symbol);
+                            return;
+                        }
                         try {
                             analyzeAndTrade(symbol);
                         } catch (Exception e) {
                             logger.error("Error in automated trading for " + symbol, e);
+                        } finally {
+                            analysisSemaphore.release();
                         }
                     });
                 }
@@ -568,19 +579,19 @@ public class StrategyEngine {
     private void submitOrderAsync(String symbol, String side, double price, MarketRegime regime) {
         // SMART CONTRARIAN MODE: Reverse signals only in weak trends/ranging
         boolean contrarianEnabled = Boolean.parseBoolean(Config.get("strategy.contrarian.enabled", "false"));
-        
+
         final String finalSide;
         if (contrarianEnabled && regime != null) {
             // Only reverse in weak trends or ranging markets, NOT in strong trends
-            boolean isWeakTrend = regime == MarketRegime.WEAK_UPTREND || 
-                                  regime == MarketRegime.WEAK_DOWNTREND;
+            boolean isWeakTrend = regime == MarketRegime.WEAK_UPTREND ||
+                    regime == MarketRegime.WEAK_DOWNTREND;
             boolean isRanging = regime.isRanging();
-            
+
             if (isWeakTrend || isRanging) {
                 String originalSide = side;
                 finalSide = side.equals("BUY") ? "SELL" : "BUY";
-                logger.info("🔄 SMART CONTRARIAN: Reversing {} → {} for {} (Regime: {})", 
-                           originalSide, finalSide, symbol, regime);
+                logger.info("🔄 SMART CONTRARIAN: Reversing {} → {} for {} (Regime: {})",
+                        originalSide, finalSide, symbol, regime);
             } else {
                 logger.info("✋ CONTRARIAN DISABLED for {} - Strong trend detected ({})", symbol, regime);
                 finalSide = side;
@@ -812,18 +823,18 @@ public class StrategyEngine {
 
     private double calculateQuantity(String symbol, double positionSizeUsdt, double price) {
         // With 20x leverage, we can control 20x the position size
-        double notionalValue = positionSizeUsdt * 20;
-        double quantity = notionalValue / price;
+        // Using BigDecimal for precision to avoid LOT_SIZE errors from Binance
+        BigDecimal notionalValue = BigDecimal.valueOf(positionSizeUsdt).multiply(BigDecimal.valueOf(20));
+        BigDecimal quantityBD = notionalValue.divide(BigDecimal.valueOf(price), 10, java.math.RoundingMode.DOWN);
 
         // Round to appropriate precision based on Binance symbol rules
         // Reference: https://www.binance.com/en/futures/BTCUSDT (check "Quantity
         // Precision")
         // Dynamic Precision from Exchange Info
         int precision = futuresService.getQuantityPrecision(symbol);
-        double scale = Math.pow(10, precision);
-        quantity = Math.floor(quantity * scale) / scale;
+        quantityBD = quantityBD.setScale(precision, java.math.RoundingMode.DOWN);
 
-        return quantity;
+        return quantityBD.doubleValue();
     }
 
     private boolean hasActivePosition(String symbol) {

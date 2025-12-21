@@ -102,11 +102,14 @@ public class AppStartupRunner implements CommandLineRunner {
                 }
 
                 List<String> symbols = Arrays.asList("BTCUSDT", "ETHUSDT", "SOLUSDT", "AVAXUSDT", "DOGEUSDT",
-                        "XRPUSDT", "MATICUSDT", "LTCUSDT", "ETCUSDT", 
+                        "XRPUSDT", "MATICUSDT", "LTCUSDT", "ETCUSDT",
                         "ASTERUSDT", "TAOUSDT");
+                // Pre-load extended kline history for indicators (EMA200, ATR, etc.)
+                logger.info("📊 Pre-loading extended kline history ({} candles) for {} symbols...", 500,
+                        symbols.size());
                 for (String sym : symbols) {
-                    // Fetch 5m klines and populate cache
-                    loadKlinesToCache(sym, "5m");
+                    // Fetch 5m klines with extended history for accurate indicator calculations
+                    loadKlinesToCache(sym, "5m", 500);
                 }
             } catch (Exception e) {
                 logger.warn("REST fallback failed to populate caches: {}", e.getMessage());
@@ -123,7 +126,7 @@ public class AppStartupRunner implements CommandLineRunner {
             });
             // Start Kline stream for all symbols (5m candles)
             List<String> klineSymbols = Arrays.asList("BTCUSDT", "ETHUSDT", "SOLUSDT", "AVAXUSDT", "DOGEUSDT",
-                    "XRPUSDT", "MATICUSDT", "LTCUSDT", "ETCUSDT", 
+                    "XRPUSDT", "MATICUSDT", "LTCUSDT", "ETCUSDT",
                     "ASTERUSDT", "TAOUSDT");
             webSocketService.startKlineStream(klineSymbols);
             logger.info("Kline stream started");
@@ -209,10 +212,20 @@ public class AppStartupRunner implements CommandLineRunner {
 
     /**
      * Helper method to load klines from REST API and add to WebSocket cache
+     * Default: 100 klines (backward compatibility)
      */
     private void loadKlinesToCache(String symbol, String interval) {
+        loadKlinesToCache(symbol, interval, 100);
+    }
+
+    /**
+     * Helper method to load klines from REST API and add to WebSocket cache
+     * 
+     * @param limit Number of klines to load (max 1500 per Binance API)
+     */
+    private void loadKlinesToCache(String symbol, String interval, int limit) {
         try {
-            String klinesJson = futuresBinanceService.getKlines(symbol, interval, 100);
+            String klinesJson = futuresBinanceService.getKlines(symbol, interval, limit);
             org.json.JSONArray klinesArr = new org.json.JSONArray(klinesJson);
             List<org.json.JSONObject> klineList = new ArrayList<>();
 
@@ -233,7 +246,7 @@ public class AppStartupRunner implements CommandLineRunner {
             }
 
             webSocketService.addKlinesToCache(symbol, interval, klineList);
-            logger.info("Loaded {} {} klines for {}", klineList.size(), interval, symbol);
+            logger.info("✅ Loaded {} {} klines for {}", klineList.size(), interval, symbol);
         } catch (Exception e) {
             logger.warn("Failed to load {} klines for {}: {}", interval, symbol, e.getMessage());
         }

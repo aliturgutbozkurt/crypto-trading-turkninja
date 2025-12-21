@@ -28,12 +28,12 @@ public class ManualTradeController {
         try {
             String symbol = (String) request.get("symbol");
             String side = (String) request.get("side");
-            Double quantity = request.get("quantity") != null 
-                ? ((Number) request.get("quantity")).doubleValue() 
-                : null;
+            Double quantity = request.get("quantity") != null
+                    ? ((Number) request.get("quantity")).doubleValue()
+                    : null;
             Integer balancePercent = request.get("balancePercent") != null
-                ? ((Number) request.get("balancePercent")).intValue()
-                : 25; // Default 25%
+                    ? ((Number) request.get("balancePercent")).intValue()
+                    : 25; // Default 25%
 
             // Validation
             if (symbol == null || symbol.isEmpty()) {
@@ -53,22 +53,22 @@ public class ManualTradeController {
                 // Get AVAILABLE balance (not total balance)
                 double availableBalance = futuresService.getAvailableBalance();
                 logger.info("💰 Available balance: ${}", availableBalance);
-                
+
                 // Use percentage of AVAILABLE balance
                 double positionSize = availableBalance * (balancePercent / 100.0);
                 quantity = (positionSize * 20) / currentPrice; // 20x leverage
-                
+
                 // Round to appropriate precision
                 int precision = futuresService.getQuantityPrecision(symbol);
                 double scale = Math.pow(10, precision);
                 quantity = Math.floor(quantity * scale) / scale;
-                
-                logger.info("💰 Using {}% of available balance: ${} → Position size: ${} → Qty: {}", 
-                           balancePercent, availableBalance, positionSize, quantity);
+
+                logger.info("💰 Using {}% of available balance: ${} → Position size: ${} → Qty: {}",
+                        balancePercent, availableBalance, positionSize, quantity);
             }
 
-            logger.info("💰 Opening manual {} position: {} @ ${} (qty: {}, {}% kalan bakiye)", 
-                       side, symbol, currentPrice, quantity, balancePercent);
+            logger.info("💰 Opening manual {} position: {} @ ${} (qty: {}, {}% kalan bakiye)",
+                    side, symbol, currentPrice, quantity, balancePercent);
 
             // Place order
             String orderId = futuresService.placeMarketOrder(symbol, side, quantity);
@@ -81,8 +81,8 @@ public class ManualTradeController {
             response.put("quantity", quantity);
             response.put("price", currentPrice);
             response.put("balancePercent", balancePercent);
-            response.put("message", String.format("✅ Manuel %s pozisyonu açıldı: %s @ $%.2f (%d%% kalan bakiye)", 
-                                                  side, symbol, currentPrice, balancePercent));
+            response.put("message", String.format("✅ Manuel %s pozisyonu açıldı: %s @ $%.2f (%d%% kalan bakiye)",
+                    side, symbol, currentPrice, balancePercent));
 
             logger.info("✅ Manual trade executed: {} {} @ ${}", side, symbol, currentPrice);
 
@@ -101,16 +101,15 @@ public class ManualTradeController {
     public ResponseEntity<?> getTradingSymbols() {
         try {
             String[] symbols = {
-                "BTCUSDT", "ETHUSDT", "SOLUSDT", "AVAXUSDT", "DOGEUSDT",
-                "XRPUSDT", "MATICUSDT", "LTCUSDT", "ETCUSDT", "LUNA2USDT",
-                "ASTERUSDT", "TAOUSDT"
+                    "BTCUSDT", "ETHUSDT", "SOLUSDT", "AVAXUSDT", "DOGEUSDT",
+                    "XRPUSDT", "MATICUSDT", "LTCUSDT", "ETCUSDT", "LUNA2USDT",
+                    "ASTERUSDT", "TAOUSDT"
             };
             return ResponseEntity.ok(symbols);
         } catch (Exception e) {
             return ResponseEntity.status(500).body("Error: " + e.getMessage());
         }
     }
-}
 
     // Add position to tracker after successful order
     private void trackPosition(String symbol, String side, double price, double quantity) {

@@ -42,8 +42,16 @@ public class SignalBatch {
 
     /**
      * Get all signals above a minimum score threshold
+     * Filters out expired signals (older than 30 seconds) before ranking
      */
     public List<SignalScore> getSignalsAboveThreshold(double minScore, int limit) {
+        // First, remove expired signals to prevent executing stale signals
+        int expiredCount = (int) signals.stream().filter(SignalScore::isExpired).count();
+        if (expiredCount > 0) {
+            signals.removeIf(SignalScore::isExpired);
+            logger.info("⏰ Removed {} expired signals from batch", expiredCount);
+        }
+
         return signals.stream()
                 .filter(s -> s.totalScore >= minScore)
                 .sorted()

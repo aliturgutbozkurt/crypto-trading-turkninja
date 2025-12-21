@@ -95,7 +95,7 @@ public class FuturesWebSocketService {
         }
     }
 
-    private static final int MAX_KLINES_PER_SYMBOL = 100;
+    private static final int MAX_KLINES_PER_SYMBOL = 500; // Extended for indicator calculations (EMA200, ATR, etc.)
 
     public FuturesWebSocketService(String apiKey, String secretKey) {
         this.apiKey = apiKey;

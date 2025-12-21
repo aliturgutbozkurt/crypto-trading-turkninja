@@ -22,14 +22,23 @@ public class SignalScore implements Comparable<SignalScore> {
     // Total score (sum of all components)
     public double totalScore;
 
-    // Signal timestamp
+    // Signal timestamp and expiration
     public final long timestamp;
+    private static final long SIGNAL_EXPIRY_MS = 30_000; // 30 seconds - signals older than this are stale
 
     public SignalScore(String symbol, String side, double price) {
         this.symbol = symbol;
         this.side = side;
         this.price = price;
         this.timestamp = System.currentTimeMillis();
+    }
+
+    /**
+     * Check if signal has expired (older than 30 seconds)
+     * Expired signals should not be executed as market conditions may have changed
+     */
+    public boolean isExpired() {
+        return System.currentTimeMillis() - timestamp > SIGNAL_EXPIRY_MS;
     }
 
     /**

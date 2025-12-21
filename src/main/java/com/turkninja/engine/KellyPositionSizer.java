@@ -250,4 +250,52 @@ public class KellyPositionSizer {
         tradeHistory.clear();
         logger.info("Trade history cleared");
     }
+
+    /**
+     * Load historical trade metrics from external storage (InfluxDB/Redis)
+     * This preserves Kelly calculations across bot restarts
+     * 
+     * @param winRate      Historical win rate (0.0-1.0)
+     * @param avgWinRatio  Average profit ratio on winning trades
+     * @param avgLossRatio Average loss ratio on losing trades (negative)
+     * @param tradeCount   Total number of historical trades
+     */
+    public void loadHistoryFromMetrics(double winRate, double avgWinRatio, double avgLossRatio, int tradeCount) {
+        if (tradeCount < minTrades) {
+            logger.info("📊 Kelly: Insufficient historical trades ({}/{}), starting fresh", tradeCount, minTrades);
+            return;
+        }
+
+        // Reconstruct approximate trade history from metrics
+        int wins = (int) Math.round(tradeCount * winRate);
+        int losses = tradeCount - wins;
+
+        // Add winning trades
+        for (int i = 0; i < wins; i++) {
+            tradeHistory.add(new TradeResult(true, avgWinRatio));
+        }
+
+        // Add losing trades
+        for (int i = 0; i < losses; i++) {
+            tradeHistory.add(new TradeResult(false, avgLossRatio));
+        }
+
+        logger.info(
+                "📊 Kelly history loaded from metrics: {} trades, {:.1f}% win rate, Avg Win: {:.2f}%, Avg Loss: {:.2f}%",
+                tradeCount, winRate * 100, avgWinRatio * 100, avgLossRatio * 100);
+    }
+
+    /**
+     * Get current metrics for persistence
+     * 
+     * @return Map containing winRate, avgWinRatio, avgLossRatio, tradeCount
+     */
+    public java.util.Map<String, Double> getMetricsForPersistence() {
+        java.util.Map<String, Double> metrics = new java.util.HashMap<>();
+        metrics.put("winRate", getWinRate());
+        metrics.put("avgWinRatio", calculateAverageWin());
+        metrics.put("avgLossRatio", calculateAverageLoss());
+        metrics.put("tradeCount", (double) tradeHistory.size());
+        return metrics;
+    }
 }

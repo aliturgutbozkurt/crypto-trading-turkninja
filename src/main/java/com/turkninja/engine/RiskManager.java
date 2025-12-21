@@ -17,6 +17,8 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.DoubleAdder;
 
 public class RiskManager {
     private static final Logger logger = LoggerFactory.getLogger(RiskManager.class);
@@ -50,12 +52,12 @@ public class RiskManager {
     // Risk limits
     private final double maxPositionSizeUsdt;
     private final int maxConcurrentPositions;
-    private double dailyLossLimit;
-    private double dailyLoss = 0.0;
+    private volatile double dailyLossLimit;
+    private final DoubleAdder dailyLoss = new DoubleAdder();
 
     // Circuit Breaker for consecutive losses
-    private int consecutiveLosses = 0;
-    private final int MAX_CONSECUTIVE_LOSSES = 3;
+    private final AtomicInteger consecutiveLosses = new AtomicInteger(0);
+    private static final int MAX_CONSECUTIVE_LOSSES = 3;
     private volatile boolean tradingPaused = false;
     private long pauseUntilTime = 0;
 
@@ -575,11 +577,11 @@ public class RiskManager {
             }
 
             if (pnl < 0) {
-                dailyLoss += Math.abs(pnl);
-                logger.warn("Daily loss updated: ${} / ${}", dailyLoss, dailyLossLimit);
+                dailyLoss.add(Math.abs(pnl));
+                logger.warn("Daily loss updated: ${} / ${}", dailyLoss.sum(), dailyLossLimit);
 
                 // Check if daily loss limit is hit
-                if (dailyLoss >= dailyLossLimit) {
+                if (dailyLoss.sum() >= dailyLossLimit) {
                     logger.error("DAILY LOSS LIMIT HIT! Stopping all trading.");
                     stopMonitoring();
                     emergencyExit();
@@ -722,7 +724,7 @@ public class RiskManager {
             } else {
                 // Resume trading
                 tradingPaused = false;
-                consecutiveLosses = 0;
+                consecutiveLosses.set(0);
                 logger.info("✅ Trading RESUMED after pause period");
             }
         }
@@ -764,8 +766,8 @@ public class RiskManager {
                 " (" + String.format("%.1f", ((totalExposure + positionSizeUsdt) / maxTotalExposure) * 100) + "%)");
 
         // 4. Check daily loss limit
-        if (dailyLoss >= dailyLossLimit) {
-            logger.warn("Daily loss limit reached: ${} / ${}", dailyLoss, dailyLossLimit);
+        if (dailyLoss.sum() >= dailyLossLimit) {
+            logger.warn("Daily loss limit reached: ${} / ${}", dailyLoss.sum(), dailyLossLimit);
             return false;
         }
 
@@ -838,28 +840,28 @@ public class RiskManager {
      */
     public void recordTrade(double pnl) {
         if (pnl < 0) {
-            dailyLoss += Math.abs(pnl);
-            consecutiveLosses++;
+            dailyLoss.add(Math.abs(pnl));
+            int currentConsecutiveLosses = consecutiveLosses.incrementAndGet();
             logger.warn("❌ Trade closed with loss: ${} (Daily loss: ${}, Consecutive: {})",
-                    pnl, dailyLoss, consecutiveLosses);
+                    pnl, dailyLoss.sum(), currentConsecutiveLosses);
 
             // Check if daily loss limit is hit
-            if (dailyLoss >= dailyLossLimit) {
+            if (dailyLoss.sum() >= dailyLossLimit) {
                 logger.error("DAILY LOSS LIMIT HIT! Stopping all trading.");
                 stopMonitoring();
                 emergencyExit();
             }
 
             // Trigger circuit breaker
-            if (consecutiveLosses >= MAX_CONSECUTIVE_LOSSES) {
+            if (currentConsecutiveLosses >= MAX_CONSECUTIVE_LOSSES) {
                 tradingPaused = true;
                 pauseUntilTime = System.currentTimeMillis() + (6 * 60 * 60 * 1000); // 6 hours
                 logger.error("🛑 CIRCUIT BREAKER TRIGGERED! Trading paused for 6 hours after {} consecutive losses",
-                        consecutiveLosses);
+                        currentConsecutiveLosses);
             }
         } else {
             // Reset on win
-            consecutiveLosses = 0;
+            consecutiveLosses.set(0);
             logger.info("✅ Trade closed with profit: ${} (Consecutive losses reset)", pnl);
         }
     }
@@ -893,8 +895,8 @@ public class RiskManager {
      * Reset daily loss counter (call at start of each day)
      */
     public void resetDailyLoss() {
-        dailyLoss = 0.0;
-        consecutiveLosses = 0;
+        dailyLoss.reset();
+        consecutiveLosses.set(0);
         tradingPaused = false;
         logger.info("Daily loss reset to $0.00, circuit breaker reset");
     }
