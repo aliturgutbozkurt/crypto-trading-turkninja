@@ -84,6 +84,13 @@ public class RiskManager {
     // Total Exposure Limiter
     private final double maxTotalExposurePercent;
 
+    // Max Drawdown Circuit Breaker
+    private final boolean circuitBreakerEnabled;
+    private final double maxDrawdownPercent;
+    private volatile double peakBalance = 0.0;
+    private volatile boolean circuitBreakerTriggered = false;
+    private volatile long circuitBreakerResetTime = 0;
+
     public RiskManager(PositionTracker positionTracker, FuturesBinanceService futuresService,
             OrderBookService orderBookService, CorrelationService correlationService,
             InfluxDBService influxDBService, TelegramNotifier telegramNotifier) {
@@ -117,9 +124,14 @@ public class RiskManager {
         // Load total exposure settings
         this.maxTotalExposurePercent = Config.getDouble("risk.max.total.exposure.percent", 0.60);
 
+        // Load Circuit Breaker settings
+        this.circuitBreakerEnabled = Config.getBoolean("risk.circuit.breaker.enabled", true);
+        this.maxDrawdownPercent = Config.getDouble("risk.circuit.breaker.max.drawdown", 0.10); // 10%
+
         logger.info(
-                "RiskManager initialized with SL/TP automation (Max Position: ${}, Max Concurrent: {}, Daily Loss Limit: ${}, OrderBook Aware: {})",
-                maxPositionSizeUsdt, maxConcurrentPositions, dailyLossLimit, ORDER_BOOK_AWARE_ENABLED);
+                "RiskManager initialized with SL/TP automation (Max Position: ${}, Max Concurrent: {}, Daily Loss Limit: ${}, OrderBook Aware: {}, Circuit Breaker: {})",
+                maxPositionSizeUsdt, maxConcurrentPositions, dailyLossLimit, ORDER_BOOK_AWARE_ENABLED,
+                circuitBreakerEnabled);
     }
 
     public void setWebSocketPushService(WebSocketPushService webSocketPushService) {
@@ -586,6 +598,9 @@ public class RiskManager {
                     stopMonitoring();
                     emergencyExit();
                 }
+
+                // Check Circuit Breaker (max drawdown)
+                checkCircuitBreaker();
             }
 
             // Remove from tracking
@@ -595,6 +610,64 @@ public class RiskManager {
         } catch (Exception e) {
             logger.error("Failed to close position for {}", symbol, e);
         }
+    }
+
+    /**
+     * Check and trigger circuit breaker if max drawdown is exceeded
+     */
+    private void checkCircuitBreaker() {
+        if (!circuitBreakerEnabled)
+            return;
+
+        try {
+            double currentBalance = futuresService.getAvailableBalance();
+
+            // Update peak balance
+            if (currentBalance > peakBalance) {
+                peakBalance = currentBalance;
+            }
+
+            // Calculate drawdown from peak
+            if (peakBalance > 0) {
+                double drawdown = (peakBalance - currentBalance) / peakBalance;
+
+                if (drawdown >= maxDrawdownPercent && !circuitBreakerTriggered) {
+                    circuitBreakerTriggered = true;
+                    circuitBreakerResetTime = System.currentTimeMillis() + (24 * 60 * 60 * 1000); // 24 hours
+
+                    logger.error("🚨 CIRCUIT BREAKER TRIGGERED! Drawdown: {:.2f}% >= {:.2f}%",
+                            drawdown * 100, maxDrawdownPercent * 100);
+                    logger.error("🚨 All trading halted for 24 hours. Peak: ${}, Current: ${}",
+                            peakBalance, currentBalance);
+
+                    // Notify via Telegram
+                    if (telegramNotifier != null) {
+                        telegramNotifier.sendAlert(TelegramNotifier.AlertLevel.CRITICAL, String.format(
+                                "CIRCUIT BREAKER TRIGGERED!\nDrawdown: %.2f%%\nPeak: $%.2f\nCurrent: $%.2f\nTrading halted for 24 hours.",
+                                drawdown * 100, peakBalance, currentBalance));
+                    }
+
+                    // Emergency exit all positions
+                    emergencyExit();
+                }
+            }
+
+            // Check if circuit breaker can be reset
+            if (circuitBreakerTriggered && System.currentTimeMillis() >= circuitBreakerResetTime) {
+                circuitBreakerTriggered = false;
+                peakBalance = currentBalance;
+                logger.info("✅ Circuit Breaker reset. Trading can resume.");
+            }
+        } catch (Exception e) {
+            logger.error("Error checking circuit breaker", e);
+        }
+    }
+
+    /**
+     * Check if trading is allowed (circuit breaker not triggered)
+     */
+    public boolean isTradingAllowed() {
+        return !circuitBreakerTriggered && !tradingPaused;
     }
 
     /**

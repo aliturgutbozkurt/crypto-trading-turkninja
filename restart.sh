@@ -50,6 +50,20 @@ if [ ! -z "$JAVA_PIDS" ]; then
     echo -e "${GREEN}✅ Cleaned up orphaned processes${NC}"
 fi
 
+# Stop ML Signal Classifier Service
+echo -e "${YELLOW}🤖 Stopping ML Signal Classifier Service...${NC}"
+if [ -f "ml_service.pid" ]; then
+    ML_PID=$(cat ml_service.pid)
+    if ps -p $ML_PID > /dev/null 2>&1; then
+        kill $ML_PID 2>/dev/null
+        echo -e "${GREEN}✅ ML Service stopped (PID: $ML_PID)${NC}"
+    fi
+    rm -f ml_service.pid
+else
+    pkill -f "uvicorn signal_classifier:app" 2>/dev/null
+    echo -e "${GREEN}✅ ML Service cleaned up${NC}"
+fi
+
 echo ""
 
 # Step 2: Rebuild the application (optional - uncomment if you want to rebuild)

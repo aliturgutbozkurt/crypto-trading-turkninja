@@ -37,6 +37,7 @@ public class AppStartupRunner implements CommandLineRunner {
     private final OrderBookService orderBookService;
     private final WebSocketPushService webSocketPushService;
     private final TelegramNotifier telegramNotifier;
+    private final com.turkninja.infra.InfluxDBService influxDBService;
 
     private final ScheduledExecutorService statusScheduler = Executors.newSingleThreadScheduledExecutor();
 
@@ -47,7 +48,8 @@ public class AppStartupRunner implements CommandLineRunner {
             StrategyEngine strategyEngine,
             OrderBookService orderBookService,
             WebSocketPushService webSocketPushService,
-            TelegramNotifier telegramNotifier) {
+            TelegramNotifier telegramNotifier,
+            com.turkninja.infra.InfluxDBService influxDBService) {
         this.futuresBinanceService = futuresBinanceService;
         this.webSocketService = webSocketService;
         this.positionTracker = positionTracker;
@@ -56,6 +58,7 @@ public class AppStartupRunner implements CommandLineRunner {
         this.orderBookService = orderBookService;
         this.webSocketPushService = webSocketPushService;
         this.telegramNotifier = telegramNotifier;
+        this.influxDBService = influxDBService;
     }
 
     @Override
@@ -144,6 +147,19 @@ public class AppStartupRunner implements CommandLineRunner {
             // Connect WebSocket push service to StrategyEngine for real-time signal
             // notifications
             strategyEngine.setWebSocketPushService(webSocketPushService);
+
+            // Warm up Kelly Position Sizer from InfluxDB historical data
+            try {
+                com.turkninja.engine.KellyPositionSizer kellyPositionSizer = strategyEngine.getKellyPositionSizer();
+                if (kellyPositionSizer != null && influxDBService != null && influxDBService.isEnabled()) {
+                    kellyPositionSizer.warmUpFromInfluxDB(influxDBService);
+                    logger.info("🔥 Kelly Position Sizer warm-up completed from InfluxDB");
+                } else {
+                    logger.info("📊 Kelly warm-up skipped (InfluxDB not enabled or Kelly not available)");
+                }
+            } catch (Exception e) {
+                logger.warn("Failed to warm up Kelly Position Sizer: {}", e.getMessage());
+            }
 
             // Start automated trading
             strategyEngine.startAutomatedTrading();

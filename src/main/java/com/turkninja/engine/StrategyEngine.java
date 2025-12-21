@@ -161,6 +161,12 @@ public class StrategyEngine {
         this.strategyFilters.add(new VolumeConfirmationFilter(indicatorService)); // Added indicatorService as per
                                                                                   // original
 
+        // Price Action Filter - FVG and Market Structure (Smart Money Concepts)
+        this.strategyFilters.add(new PriceActionFilter(indicatorService));
+
+        // Order Block Filter - Institutional Supply/Demand Zones (SMC)
+        this.strategyFilters.add(new OrderBlockFilter(indicatorService));
+
         logger.info("✅ Strategy Engine initialized with {} filters", strategyFilters.size());
         logger.info("✅ Kelly Position Sizer initialized: enabled={}, hasSufficientHistory={}",
                 kellyPositionSizer.isEnabled(), kellyPositionSizer.hasSufficientHistory());
@@ -318,6 +324,10 @@ public class StrategyEngine {
 
     public RiskManager getRiskManager() {
         return riskManager;
+    }
+
+    public KellyPositionSizer getKellyPositionSizer() {
+        return kellyPositionSizer;
     }
 
     private void analyzeBTC() {

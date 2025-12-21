@@ -7,6 +7,7 @@ target/
 # Log files
 *.log
 *.txt
+!ml_service/requirements.txt
 startup_log.txt
 app_output.txt
 

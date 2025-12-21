@@ -298,4 +298,37 @@ public class KellyPositionSizer {
         metrics.put("tradeCount", (double) tradeHistory.size());
         return metrics;
     }
+
+    /**
+     * Warm up Kelly Position Sizer from InfluxDB historical data
+     * This should be called at startup to preserve calculations across restarts
+     * 
+     * @param influxDBService Service to query historical trade data
+     */
+    public void warmUpFromInfluxDB(com.turkninja.infra.InfluxDBService influxDBService) {
+        if (influxDBService == null || !influxDBService.isEnabled()) {
+            logger.info("📊 Kelly warm-up skipped: InfluxDB not available");
+            return;
+        }
+
+        try {
+            java.util.Map<String, Double> metrics = influxDBService.getKellyMetrics();
+
+            double winRate = metrics.getOrDefault("winRate", 0.0);
+            double avgWinRatio = metrics.getOrDefault("avgWinRatio", 0.0);
+            double avgLossRatio = metrics.getOrDefault("avgLossRatio", 0.0);
+            int tradeCount = metrics.getOrDefault("totalTrades", 0.0).intValue();
+
+            if (tradeCount >= minTrades) {
+                loadHistoryFromMetrics(winRate, avgWinRatio, avgLossRatio, tradeCount);
+                logger.info("🔥 Kelly warm-up complete: {} trades loaded, {:.1f}% win rate",
+                        tradeCount, winRate * 100);
+            } else {
+                logger.info("📊 Kelly warm-up: Insufficient history ({}/{} trades), using fallback sizing",
+                        tradeCount, minTrades);
+            }
+        } catch (Exception e) {
+            logger.error("Failed to warm up Kelly from InfluxDB: {}", e.getMessage());
+        }
+    }
 }

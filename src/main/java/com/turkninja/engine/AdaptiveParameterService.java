@@ -299,6 +299,63 @@ public class AdaptiveParameterService {
     }
 
     /**
+     * Get dynamic leverage based on ATR volatility (Phase 4)
+     * High volatility → Lower leverage (reduce risk)
+     * Low volatility → Higher leverage (maximize returns)
+     * 
+     * @param symbol       Trading symbol
+     * @param barSeries    Price data
+     * @param currentPrice Current price
+     * @return Recommended leverage (5-20x)
+     */
+    public int getDynamicLeverage(String symbol, BarSeries barSeries, double currentPrice) {
+        // Load configuration
+        int highVolLeverage = Config.getInt("strategy.leverage.high.vol", 5);
+        int mediumVolLeverage = Config.getInt("strategy.leverage.medium.vol", 10);
+        int lowVolLeverage = Config.getInt("strategy.leverage.low.vol", 20);
+        boolean dynamicLeverageEnabled = Config.getBoolean("strategy.dynamic.leverage.enabled", false);
+
+        if (!dynamicLeverageEnabled) {
+            // Return default leverage when disabled
+            int defaultLeverage = Config.getInt("trade.leverage", 20);
+            return defaultLeverage;
+        }
+
+        try {
+            // Calculate ATR volatility
+            double atr = indicatorService.getATR(barSeries, atrPeriod);
+            double atrPercent = (atr / currentPrice) * 100;
+
+            int leverage;
+            String regime;
+
+            if (atrPercent > highVolatilityThreshold) {
+                // HIGH VOLATILITY (>2.5%): Use minimum leverage (5x)
+                leverage = highVolLeverage;
+                regime = "HIGH_VOL";
+            } else if (atrPercent < lowVolatilityThreshold) {
+                // LOW VOLATILITY (<0.5%): Use maximum leverage (20x)
+                leverage = lowVolLeverage;
+                regime = "LOW_VOL";
+            } else {
+                // MEDIUM VOLATILITY: Use moderate leverage (10x)
+                leverage = mediumVolLeverage;
+                regime = "MED_VOL";
+            }
+
+            logger.info("📊 Dynamic Leverage {} (ATR={:.2f}%): {}x ({})",
+                    symbol, atrPercent, leverage, regime);
+
+            return leverage;
+
+        } catch (Exception e) {
+            logger.error("Error calculating dynamic leverage for {}: {}", symbol, e.getMessage());
+            // Fallback to safe default
+            return Config.getInt("trade.leverage", 10);
+        }
+    }
+
+    /**
      * Clear parameters cache (force recalculation)
      */
     public void clearCache() {

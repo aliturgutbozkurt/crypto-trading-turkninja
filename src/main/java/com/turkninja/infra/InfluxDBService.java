@@ -622,6 +622,91 @@ public class InfluxDBService {
     }
 
     /**
+     * Get metrics specifically for Kelly Criterion warm-up
+     * Returns winRate, avgWinRatio, avgLossRatio, totalTrades
+     */
+    public Map<String, Double> getKellyMetrics() {
+        if (!enabled) {
+            return Map.of(
+                    "winRate", 0.0,
+                    "avgWinRatio", 0.0,
+                    "avgLossRatio", 0.0,
+                    "totalTrades", 0.0);
+        }
+
+        try {
+            // Calculate average winning trade P&L as ratio of position size
+            String avgWinFlux = String.format(
+                    "from(bucket: \"%s\") " +
+                            "|> range(start: -365d) " +
+                            "|> filter(fn: (r) => r._measurement == \"position_closes\") " +
+                            "|> filter(fn: (r) => r._field == \"pnl\") " +
+                            "|> filter(fn: (r) => r._value > 0) " +
+                            "|> mean()",
+                    bucket);
+
+            // Calculate average losing trade P&L as ratio of position size
+            String avgLossFlux = String.format(
+                    "from(bucket: \"%s\") " +
+                            "|> range(start: -365d) " +
+                            "|> filter(fn: (r) => r._measurement == \"position_closes\") " +
+                            "|> filter(fn: (r) => r._field == \"pnl\") " +
+                            "|> filter(fn: (r) => r._value < 0) " +
+                            "|> mean()",
+                    bucket);
+
+            // Get aggregate metrics for win rate and total trades
+            Map<String, Object> aggregates = getAggregateMetrics();
+            double winRate = ((Number) aggregates.getOrDefault("winRate", 0.0)).doubleValue() / 100.0; // Convert to 0-1
+            long totalTrades = ((Number) aggregates.getOrDefault("totalTrades", 0L)).longValue();
+
+            double avgWin = 0.0;
+            double avgLoss = 0.0;
+
+            // Execute average win query
+            List<FluxTable> avgWinTables = queryApi.query(avgWinFlux, org);
+            if (!avgWinTables.isEmpty() && !avgWinTables.get(0).getRecords().isEmpty()) {
+                Object val = avgWinTables.get(0).getRecords().get(0).getValue();
+                if (val instanceof Number) {
+                    avgWin = ((Number) val).doubleValue();
+                }
+            }
+
+            // Execute average loss query
+            List<FluxTable> avgLossTables = queryApi.query(avgLossFlux, org);
+            if (!avgLossTables.isEmpty() && !avgLossTables.get(0).getRecords().isEmpty()) {
+                Object val = avgLossTables.get(0).getRecords().get(0).getValue();
+                if (val instanceof Number) {
+                    avgLoss = ((Number) val).doubleValue();
+                }
+            }
+
+            // Convert to ratios (assuming average position size of $100)
+            // This is a rough approximation - in production, you'd calculate actual ratios
+            double avgPositionSize = 100.0; // Default assumption
+            double avgWinRatio = avgWin / avgPositionSize;
+            double avgLossRatio = avgLoss / avgPositionSize; // Will be negative
+
+            logger.info("📊 Kelly metrics calculated: winRate={:.2f}%, avgWin=${:.2f}, avgLoss=${:.2f}, trades={}",
+                    winRate * 100, avgWin, avgLoss, totalTrades);
+
+            return Map.of(
+                    "winRate", winRate,
+                    "avgWinRatio", avgWinRatio,
+                    "avgLossRatio", avgLossRatio,
+                    "totalTrades", (double) totalTrades);
+
+        } catch (Exception e) {
+            logger.error("Failed to query Kelly metrics: {}", e.getMessage());
+            return Map.of(
+                    "winRate", 0.0,
+                    "avgWinRatio", 0.0,
+                    "avgLossRatio", 0.0,
+                    "totalTrades", 0.0);
+        }
+    }
+
+    /**
      * Close connection on shutdown
      */
     public void close() {

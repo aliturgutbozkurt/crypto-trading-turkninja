@@ -26,6 +26,11 @@ public class OrderBookService {
     private final double maxSlippagePercent;
     private final boolean wallFilterEnabled;
 
+    // CVD (Cumulative Volume Delta) tracking - Order Flow Analysis
+    private final Map<String, Double> cumulativeVolumeDelta = new ConcurrentHashMap<>();
+    private final Map<String, Double> previousBidVolume = new ConcurrentHashMap<>();
+    private final Map<String, Double> previousAskVolume = new ConcurrentHashMap<>();
+
     public OrderBookService() {
         this.orderBooks = new ConcurrentHashMap<>();
         this.enabled = Config.getBoolean("orderbook.enabled", true);
@@ -39,7 +44,8 @@ public class OrderBookService {
         this.wallStdDevMultiplier = Config.getDouble("orderbook.wall_stddev_multiplier", 2.0);
         this.maxSlippagePercent = Config.getDouble("orderbook.max_slippage_percent", 0.005);
 
-        logger.info("OrderBookService initialized: enabled={}, depthLevels={}", enabled, depthLevels);
+        logger.info("OrderBookService initialized: enabled={}, depthLevels={}, CVD tracking=enabled", enabled,
+                depthLevels);
     }
 
     /**
@@ -355,5 +361,67 @@ public class OrderBookService {
 
     public OrderBook getOrderBook(String symbol) {
         return orderBooks.get(symbol);
+    }
+
+    /**
+     * Update CVD (Cumulative Volume Delta) based on order book changes
+     * CVD = Cumulative(BuyVolume - SellVolume)
+     * Positive CVD = Buying pressure, Negative CVD = Selling pressure
+     */
+    public void updateCVD(String symbol, double bidVolume, double askVolume) {
+        double prevBid = previousBidVolume.getOrDefault(symbol, 0.0);
+        double prevAsk = previousAskVolume.getOrDefault(symbol, 0.0);
+
+        // Calculate delta (change in volume at bid vs ask)
+        double bidDelta = bidVolume - prevBid;
+        double askDelta = askVolume - prevAsk;
+
+        // CVD: positive when buying absorbs selling, negative when selling absorbs
+        // buying
+        double delta = bidDelta - askDelta;
+
+        // Accumulate
+        double currentCVD = cumulativeVolumeDelta.getOrDefault(symbol, 0.0);
+        cumulativeVolumeDelta.put(symbol, currentCVD + delta);
+
+        // Store current values for next calculation
+        previousBidVolume.put(symbol, bidVolume);
+        previousAskVolume.put(symbol, askVolume);
+    }
+
+    /**
+     * Get CVD value for a symbol
+     * 
+     * @return CVD value (positive = buy pressure, negative = sell pressure)
+     */
+    public double getCVD(String symbol) {
+        return cumulativeVolumeDelta.getOrDefault(symbol, 0.0);
+    }
+
+    /**
+     * Get CVD signal: confirms if order flow supports the trade direction
+     * 
+     * @param isLong true for LONG, false for SHORT
+     * @return true if CVD confirms the direction
+     */
+    public boolean confirmCVDSignal(String symbol, boolean isLong) {
+        double cvd = getCVD(symbol);
+
+        if (isLong) {
+            // For LONG: CVD should be positive (buying pressure)
+            return cvd > 0;
+        } else {
+            // For SHORT: CVD should be negative (selling pressure)
+            return cvd < 0;
+        }
+    }
+
+    /**
+     * Reset CVD for a symbol (call periodically or on significant events)
+     */
+    public void resetCVD(String symbol) {
+        cumulativeVolumeDelta.put(symbol, 0.0);
+        previousBidVolume.put(symbol, 0.0);
+        previousAskVolume.put(symbol, 0.0);
     }
 }

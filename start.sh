@@ -59,6 +59,30 @@ if [ -d "/tmp/apache-maven-3.9.6/bin" ]; then
     echo "✅ Using local Maven from /tmp/apache-maven-3.9.6"
 fi
 
+# Start ML Signal Classifier Service (if enabled)
+ML_ENABLED=$(grep "ml.signal.validator.enabled=true" src/main/resources/application.properties 2>/dev/null)
+if [ ! -z "$ML_ENABLED" ]; then
+    echo "🤖 Starting ML Signal Classifier Service..."
+    if [ -f "ml_service/signal_model.pkl" ]; then
+        cd ml_service
+        nohup python3 -m uvicorn signal_classifier:app --host 0.0.0.0 --port 8000 > ../ml_service.log 2>&1 &
+        ML_PID=$!
+        echo $ML_PID > ../ml_service.pid
+        cd ..
+        sleep 2
+        if curl -s http://localhost:8000/health > /dev/null 2>&1; then
+            echo "✅ ML Service running on http://localhost:8000 (PID: $ML_PID)"
+        else
+            echo "⚠️  ML Service started but health check failed"
+        fi
+    else
+        echo "⚠️  ML model not trained yet. Run: cd ml_service && python train_model.py"
+    fi
+else
+    echo "ℹ️  ML Signal Validator is disabled (set ml.signal.validator.enabled=true to enable)"
+fi
+
+echo ""
+
 # Start the application and log to file
 mvn clean spring-boot:run | tee startup_log.txt
-
